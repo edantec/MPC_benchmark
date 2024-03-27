@@ -3,40 +3,27 @@ import aligator
 import pinocchio as pin
 import matplotlib.pyplot as plt
 from bullet_robot import BulletRobot
-import example_robot_data
 import time
-import copy
 
 from talos_utils import (
+    loadTalos, 
+    URDF_FILENAME,
+    modelPath,
     IDSolver,
     shapeState,
     footTrajectory,
     update_timings,
-    save_trajectory
+    save_trajectory,
+    addCoinFrames
 )
 
 
 from aligator import (manifolds, 
                     dynamics, 
                     constraints,)
-from utils import get_endpoint_traj, compute_quasistatic, ArgsBase
 
-
-URDF_FILENAME = "talos_reduced.urdf"
-SRDF_FILENAME = "talos.srdf"
-SRDF_SUBPATH = "/talos_data/srdf/" + SRDF_FILENAME
-URDF_SUBPATH = "/talos_data/robots/" + URDF_FILENAME
-
-modelPath = example_robot_data.getModelPath(URDF_SUBPATH)
-
-robotComplete = example_robot_data.load("talos")
-qComplete = robotComplete.model.referenceConfigurations["half_sitting"]
-
-locked_joints = [20,21,22,23,28,29,30,31]
-locked_joints += [32, 33]
-robot = robotComplete.buildReducedRobot(locked_joints, qComplete)
-rmodel: pin.Model = robot.model
-rdata: pin.Data = robot.data
+rmodelComplete, rmodel, qComplete, q0 = loadTalos()
+rdata = rmodel.createData()
 
 space = manifolds.MultibodyPhaseSpace(rmodel)
 
@@ -62,92 +49,23 @@ com0 = pin.centerOfMass(rmodel,rdata,q0)
 
 LF_id = rmodel.getFrameId("left_sole_link")
 RF_id = rmodel.getFrameId("right_sole_link")
+sole_ids = [LF_id, RF_id]
 base_id = rmodel.getFrameId("base_link")
 
 controlled_joints = rmodel.names[1:].tolist()
-controlled_ids = [robotComplete.model.getJointId(name_joint) for name_joint in controlled_joints[1:]]
+controlled_ids = [rmodelComplete.getJointId(name_joint) for name_joint in controlled_joints[1:]]
 
 """ Initialize simulation"""
 device = BulletRobot(controlled_joints,
                      modelPath,
                      URDF_FILENAME,
                      1e-3,
-                     robotComplete.model)
+                     rmodelComplete)
 device.initializeJoints(qComplete)
 q_current, v_current = device.measureState()
 
 """ Add coin frames in contact, 4 for each foot"""
-trans_FL = np.array([0.1, 0.075, 0])
-trans_FR = np.array([0.1, -0.075, 0])
-trans_HL = np.array([-0.1, 0.075, 0])
-trans_HR = np.array([-0.1, -0.075, 0])
-FL_contact_placement = pin.SE3.Identity()
-FL_contact_placement.translation = trans_FL
-FR_contact_placement = pin.SE3.Identity()
-FR_contact_placement.translation = trans_FR
-HL_contact_placement = pin.SE3.Identity()
-HL_contact_placement.translation = trans_HL
-HR_contact_placement = pin.SE3.Identity()
-HR_contact_placement.translation = trans_HR
-
-frame_contact_placement = [
-    FL_contact_placement,
-    FR_contact_placement,
-    HL_contact_placement,
-    HR_contact_placement
-]
-                           
-LF_FL_frame = pin.Frame("LF_FL", 
-                        rmodel.frames[LF_id].parentJoint,
-                        rmodel.frames[LF_id].parentFrame,
-                        rmodel.frames[LF_id].placement * FL_contact_placement, pin.OP_FRAME)
-LF_FR_frame = pin.Frame("LF_FR", 
-                        rmodel.frames[LF_id].parentJoint,
-                        rmodel.frames[LF_id].parentFrame,
-                        rmodel.frames[LF_id].placement * FR_contact_placement, pin.OP_FRAME)
-LF_HL_frame = pin.Frame("LF_HL", 
-                        rmodel.frames[LF_id].parentJoint,
-                        rmodel.frames[LF_id].parentFrame,
-                        rmodel.frames[LF_id].placement * HL_contact_placement, pin.OP_FRAME)
-LF_HR_frame = pin.Frame("LF_HR", 
-                        rmodel.frames[LF_id].parentJoint,
-                        rmodel.frames[LF_id].parentFrame,
-                        rmodel.frames[LF_id].placement * HR_contact_placement, pin.OP_FRAME)
-
-RF_FL_frame = pin.Frame("RF_FL", 
-                        rmodel.frames[RF_id].parentJoint,
-                        rmodel.frames[RF_id].parentFrame,
-                        rmodel.frames[RF_id].placement * FL_contact_placement, pin.OP_FRAME)
-RF_FR_frame = pin.Frame("RF_FR", 
-                        rmodel.frames[RF_id].parentJoint,
-                        rmodel.frames[RF_id].parentFrame,
-                        rmodel.frames[RF_id].placement * FR_contact_placement, pin.OP_FRAME)
-RF_HL_frame = pin.Frame("RF_HL", 
-                        rmodel.frames[RF_id].parentJoint,
-                        rmodel.frames[RF_id].parentFrame,
-                        rmodel.frames[RF_id].placement * HL_contact_placement, pin.OP_FRAME)
-RF_HR_frame = pin.Frame("RF_HR", 
-                        rmodel.frames[RF_id].parentJoint,
-                        rmodel.frames[RF_id].parentFrame,
-                        rmodel.frames[RF_id].placement * HR_contact_placement, pin.OP_FRAME)
-
-LF_FL_id = rmodel.addFrame(LF_FL_frame)
-LF_FR_id = rmodel.addFrame(LF_FR_frame)
-LF_HL_id = rmodel.addFrame(LF_HL_frame)
-LF_HR_id = rmodel.addFrame(LF_HR_frame)
-
-RF_FL_id = rmodel.addFrame(RF_FL_frame)
-RF_FR_id = rmodel.addFrame(RF_FR_frame)
-RF_HL_id = rmodel.addFrame(RF_HL_frame)
-RF_HR_id = rmodel.addFrame(RF_HR_frame)
-
-contact_ids = [LF_FL_id, LF_FR_id, LF_HL_id, LF_HR_id,
-             RF_FL_id, RF_FR_id, RF_HL_id, RF_HR_id]
-sole_ids = [LF_id, RF_id]
-
-LF_joint_id = rmodel.getJointId("leg_left_6_joint")
-RF_joint_id = rmodel.getJointId("leg_right_6_joint")
-
+rmodel, contact_ids, frame_contact_placement = addCoinFrames(rmodel, LF_id, RF_id)
 
 """ Create costs and dynamics"""
 w_x = np.array([
@@ -193,7 +111,7 @@ def createStage(contact_state, contact_state_previous, LF_pose, RF_pose):
     coins_boolean = [contact_state[0] for _ in range(4)] + \
                     [contact_state[1] for _ in range(4)]
     
-    stage_rmodel = robot.model.copy()
+    stage_rmodel = rmodel.copy()
     stage_space = manifolds.MultibodyPhaseSpace(stage_rmodel)
 
     cent_mom = aligator.CentroidalMomentumDerivativeResidual(
@@ -290,40 +208,17 @@ for i in range(1, len(contact_phases)):
 
 Tmpc = len(contact_phases)
 
-""" u0refs = []
-u0_ds = np.zeros(nk * 3 + rmodel.nv - 6)
-u0_ss_left = np.zeros(nk * 3 + rmodel.nv - 6)
-u0_ss_right = np.zeros(nk * 3 + rmodel.nv - 6)
-for r in range(8):
-    u0_ds[r * 3 + 2] = -mass * gravity[2] / 8
-for r in range(4):
-    u0_ss_left[r * 3 + 2] = -mass * gravity[2] / 4
-    u0_ss_right[(r + 4) * 3 + 2] = -mass * gravity[2] / 4
+""" Define feet trajectory """
+swing_apex = 0.15
+x_forward = 0.2
+y_gap = 0.18
+x_depth = 0.0
 
-for j in range(T_ds):
-    uref = np.zeros(nk * 3 + rmodel.nv - 6)
-    uref = (T_ds - j) / float(T_ds) * u0_ds + j / float(T_ds) * u0_ss_left
-    u0refs.append(uref)
+foottraj = footTrajectory(
+    rdata.oMf[LF_id].copy(), rdata.oMf[RF_id].copy(), T_ss, T_ds, nsteps, swing_apex, x_forward, y_gap, x_depth
+)
 
-
-for step in range(total_steps):
-    for j in range(T_ss):
-        u0refs.append(u0_ss_left)
-    for j in range(T_ds):
-        uref = np.zeros(nk * 3 + rmodel.nv - 6)
-        uref = (T_ds - j) / float(T_ds) * u0_ss_left + j / float(T_ds) * u0_ss_right
-        u0refs.append(uref)
-    for j in range(T_ss):
-        u0refs.append(u0_ss_right)
-    
-    for j in range(T_ds):
-        uref = np.zeros(nk * 3 + rmodel.nv - 6)
-        uref = (T_ds - j) / float(T_ds) * u0_ss_right + j / float(T_ds) * u0_ss_left
-        u0refs.append(uref)
-
-for j in range(nsteps):
-    u0refs.append(u0_ds) """
-
+""" Create the optimal problem and the full horizon """
 stages_full = [createStage(contact_phases[0], contact_phases[0], rdata.oMf[LF_id].copy(), rdata.oMf[RF_id].copy())]
 for i in range(1,Tmpc):
     stages_full.append(createStage(contact_phases[i],contact_phases[i-1], rdata.oMf[LF_id].copy(), rdata.oMf[RF_id].copy()))
@@ -402,16 +297,6 @@ solve_time = []
 
 weights_ID = [10, 1000]
 ID_solver = IDSolver(rmodel, weights_ID, nk, mu, contact_ids, force_size, False)
-
-""" Define feet trajectory """
-swing_apex = 0.15
-x_forward = 0.2
-y_gap = 0.18
-x_depth = 0.0
-
-foottraj = footTrajectory(
-    rdata.oMf[LF_id].copy(), rdata.oMf[RF_id].copy(), T_ss, T_ds, nsteps, swing_apex, x_forward, y_gap, x_depth
-)
 
 for t in range(Tmpc):
     print("Time " + str(t))

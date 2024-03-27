@@ -2,11 +2,13 @@ import numpy as np
 import aligator
 import pinocchio as pin
 from bullet_robot import BulletRobot
-import example_robot_data
 import time
 
 import copy
 from talos_utils import (
+    loadTalos, 
+    URDF_FILENAME,
+    modelPath,
     IKIDSolver_f6,
     shapeState,
     footTrajectory,
@@ -19,21 +21,8 @@ from aligator import (manifolds,
                     dynamics, 
                     constraints,)
 
-URDF_FILENAME = "talos_reduced.urdf"
-SRDF_FILENAME = "talos.srdf"
-SRDF_SUBPATH = "/talos_data/srdf/" + SRDF_FILENAME
-URDF_SUBPATH = "/talos_data/robots/" + URDF_FILENAME
-
-modelPath = example_robot_data.getModelPath(URDF_SUBPATH)
-
-robotComplete = example_robot_data.load("talos")
-qComplete = robotComplete.model.referenceConfigurations["half_sitting"]
-
-locked_joints = [20,21,22,23,28,29,30,31]
-locked_joints += [32, 33]
-robot = robotComplete.buildReducedRobot(locked_joints, qComplete)
-rmodel: pin.Model = robot.model
-rdata: pin.Data = robot.data
+rmodelComplete, rmodel, qComplete, q0 = loadTalos()
+rdata = rmodel.createData()
 
 low_limits = rmodel.lowerPositionLimit[7:]
 up_limits = rmodel.upperPositionLimit[7:]
@@ -48,7 +37,6 @@ space = manifolds.VectorSpace(nx)
 space_multibody = manifolds.MultibodyPhaseSpace(rmodel)
 x0 = space.neutral()
 
-q0 = rmodel.referenceConfigurations["half_sitting"]
 u0 = np.zeros(nu)
 pin.forwardKinematics(rmodel, rdata, q0)
 pin.updateFramePlacements(rmodel, rdata)
@@ -65,11 +53,12 @@ for i in range(nk):
     u0[force_size * i + 2] = -gravity[2] * mass / nk
 
 controlled_joints = rmodel.names[1:].tolist()
-controlled_ids = [robotComplete.model.getJointId(name_joint) for name_joint in controlled_joints[1:]]
+controlled_ids = [rmodelComplete.getJointId(name_joint) for name_joint in controlled_joints[1:]]
 umax = rmodel.effortLimit[6:]
 
 LF_id = rmodel.getFrameId("left_sole_link")
 RF_id = rmodel.getFrameId("right_sole_link")
+sole_ids = [LF_id, RF_id]
 base_id = rmodel.getFrameId("base_link")
 torso_id = rmodel.getFrameId("torso_2_link")
 
@@ -78,12 +67,10 @@ device = BulletRobot(controlled_joints,
                         modelPath,
                         URDF_FILENAME,
                         1e-3,
-                        robotComplete.model,
+                        rmodelComplete,
                         q0[:3])
 device.initializeJoints(qComplete)
 q_current, v_current = device.measureState()
-
-sole_ids = [LF_id, RF_id]
 
 """ Define gait and time parameters"""
 T_ds = 20  # Double support time
@@ -119,6 +106,16 @@ for i in range(1, len(contact_phases)):
         land_LFs.append(i + nsteps)
 
 T_mpc = len(contact_phases)  # Size of the problem
+
+""" Define feet trajectory """
+swing_apex = 0.15
+x_forward = 0.2
+y_gap = 0.18
+x_depth = 0
+
+foottraj = footTrajectory(
+    rdata.oMf[LF_id].copy(), rdata.oMf[RF_id].copy(), T_ss, T_ds, nsteps, swing_apex, x_forward, y_gap, x_depth
+)
 
 """ Create dynamics and costs """
 
@@ -195,16 +192,6 @@ for i in range(nsteps):
 stages_full = [createStage(contact_phases[i], rdata.oMf[LF_id].copy(), rdata.oMf[RF_id].copy()) for i in range(T_mpc)]
 
 problem = aligator.TrajOptProblem(x0, stages, term_cost)
-
-""" Define feet trajectory """
-swing_apex = 0.15
-x_forward = 0.2
-y_gap = 0.18
-x_depth = 0
-
-foottraj = footTrajectory(
-    rdata.oMf[LF_id].copy(), rdata.oMf[RF_id].copy(), T_ss, T_ds, nsteps, swing_apex, x_forward, y_gap, x_depth
-)
 
 """ Parametrize the solver"""
 

@@ -2,12 +2,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os 
 import pinocchio as pin
-from aligator import (manifolds, 
-                    dynamics, 
-                    constraints,)
-from utils import get_endpoint_traj, compute_quasistatic, ArgsBase
 
-DEFAULT_SAVE_DIR = "/home/edantec/Documents/prototyping/MPC/tmp"
+CURRENT_DIRECTORY = os.getcwd()
+DEFAULT_SAVE_DIR = CURRENT_DIRECTORY + '/tmp'
 
 def load_data(npz_file):
     """
@@ -40,7 +37,7 @@ def computeCoP(LF_pose, RF_pose, LF_force, LF_torque, RF_force, RF_torque):
     
     return cop_total
 
-data = load_data("tmp/kinodynamics_f3.npz") # kinodynamics_f3 fulldynamics centroidal
+data = load_data("tmp/centroidal_f6.npz") # kinodynamics_f3 fulldynamics centroidal
 xs = data["xs"]
 us = data["us"]
 com = data["com"]

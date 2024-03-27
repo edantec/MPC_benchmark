@@ -3,8 +3,96 @@ import pinocchio as pin
 import proxsuite
 import ndcurves
 import os 
+import example_robot_data
 
-DEFAULT_SAVE_DIR = "/home/edantec/Documents/prototyping/MPC/tmp"
+CURRENT_DIRECTORY = os.getcwd()
+DEFAULT_SAVE_DIR = CURRENT_DIRECTORY + '/tmp'
+
+URDF_FILENAME = "talos_reduced.urdf"
+URDF_SUBPATH = "/talos_data/robots/" + URDF_FILENAME
+modelPath = example_robot_data.getModelPath(URDF_SUBPATH)
+
+def loadTalos():
+    robotComplete = example_robot_data.load("talos")
+    qComplete = robotComplete.model.referenceConfigurations["half_sitting"]
+
+    locked_joints = [20,21,22,23,28,29,30,31]
+    locked_joints += [32, 33]
+    robot = robotComplete.buildReducedRobot(locked_joints, qComplete)
+    rmodel: pin.Model = robot.model
+    q0 = rmodel.referenceConfigurations["half_sitting"]
+
+    return robotComplete.model, rmodel, qComplete, q0
+
+def addCoinFrames(rmodel, LF_id, RF_id):
+    trans_FL = np.array([0.1, 0.075, 0])
+    trans_FR = np.array([0.1, -0.075, 0])
+    trans_HL = np.array([-0.1, 0.075, 0])
+    trans_HR = np.array([-0.1, -0.075, 0])
+    FL_contact_placement = pin.SE3.Identity()
+    FL_contact_placement.translation = trans_FL
+    FR_contact_placement = pin.SE3.Identity()
+    FR_contact_placement.translation = trans_FR
+    HL_contact_placement = pin.SE3.Identity()
+    HL_contact_placement.translation = trans_HL
+    HR_contact_placement = pin.SE3.Identity()
+    HR_contact_placement.translation = trans_HR
+
+    frame_contact_placement = [
+        FL_contact_placement,
+        FR_contact_placement,
+        HL_contact_placement,
+        HR_contact_placement
+    ]
+                            
+    LF_FL_frame = pin.Frame("LF_FL", 
+                            rmodel.frames[LF_id].parentJoint,
+                            rmodel.frames[LF_id].parentFrame,
+                            rmodel.frames[LF_id].placement * FL_contact_placement, pin.OP_FRAME)
+    LF_FR_frame = pin.Frame("LF_FR", 
+                            rmodel.frames[LF_id].parentJoint,
+                            rmodel.frames[LF_id].parentFrame,
+                            rmodel.frames[LF_id].placement * FR_contact_placement, pin.OP_FRAME)
+    LF_HL_frame = pin.Frame("LF_HL", 
+                            rmodel.frames[LF_id].parentJoint,
+                            rmodel.frames[LF_id].parentFrame,
+                            rmodel.frames[LF_id].placement * HL_contact_placement, pin.OP_FRAME)
+    LF_HR_frame = pin.Frame("LF_HR", 
+                            rmodel.frames[LF_id].parentJoint,
+                            rmodel.frames[LF_id].parentFrame,
+                            rmodel.frames[LF_id].placement * HR_contact_placement, pin.OP_FRAME)
+
+    RF_FL_frame = pin.Frame("RF_FL", 
+                            rmodel.frames[RF_id].parentJoint,
+                            rmodel.frames[RF_id].parentFrame,
+                            rmodel.frames[RF_id].placement * FL_contact_placement, pin.OP_FRAME)
+    RF_FR_frame = pin.Frame("RF_FR", 
+                            rmodel.frames[RF_id].parentJoint,
+                            rmodel.frames[RF_id].parentFrame,
+                            rmodel.frames[RF_id].placement * FR_contact_placement, pin.OP_FRAME)
+    RF_HL_frame = pin.Frame("RF_HL", 
+                            rmodel.frames[RF_id].parentJoint,
+                            rmodel.frames[RF_id].parentFrame,
+                            rmodel.frames[RF_id].placement * HL_contact_placement, pin.OP_FRAME)
+    RF_HR_frame = pin.Frame("RF_HR", 
+                            rmodel.frames[RF_id].parentJoint,
+                            rmodel.frames[RF_id].parentFrame,
+                            rmodel.frames[RF_id].placement * HR_contact_placement, pin.OP_FRAME)
+
+    LF_FL_id = rmodel.addFrame(LF_FL_frame)
+    LF_FR_id = rmodel.addFrame(LF_FR_frame)
+    LF_HL_id = rmodel.addFrame(LF_HL_frame)
+    LF_HR_id = rmodel.addFrame(LF_HR_frame)
+
+    RF_FL_id = rmodel.addFrame(RF_FL_frame)
+    RF_FR_id = rmodel.addFrame(RF_FR_frame)
+    RF_HL_id = rmodel.addFrame(RF_HL_frame)
+    RF_HR_id = rmodel.addFrame(RF_HR_frame)
+
+    contact_ids = [LF_FL_id, LF_FR_id, LF_HL_id, LF_HR_id,
+             RF_FL_id, RF_FR_id, RF_HL_id, RF_HR_id]
+
+    return rmodel, contact_ids, frame_contact_placement
 
 def save_trajectory(
     xs,
