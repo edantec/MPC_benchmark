@@ -210,7 +210,7 @@ axs[2,1].set_title('RF z')
 
 BINS = 50
 plt.figure("Computational load for 1 MPC iteration")
-plt.hist(solve_time, bins=BINS)
+plt.hist(solve_time * 1000, bins=BINS)
 plt.legend()
 plt.xlabel("Time (ms)")
 plt.ylabel("Occurences")

@@ -3,10 +3,12 @@ import aligator
 import pinocchio as pin
 import matplotlib.pyplot as plt
 from bullet_robot import BulletRobot
-import example_robot_data
 import time
 
 from talos_utils import (
+    loadTalos,
+    URDF_FILENAME,
+    modelPath,
     shapeState,
     footTrajectory,
     update_timings,
@@ -16,25 +18,10 @@ from talos_utils import (
 from aligator import (manifolds, 
                     dynamics, 
                     constraints,)
-from utils import get_endpoint_traj, compute_quasistatic, ArgsBase
 
-DEFAULT_SAVE_DIR = "/home/edantec/Documents/MPC/examples/tmp"
+rmodelComplete, rmodel, qComplete, q0 = loadTalos()
+rdata = rmodel.createData()
 
-URDF_FILENAME = "talos_reduced.urdf"
-SRDF_FILENAME = "talos.srdf"
-SRDF_SUBPATH = "/talos_data/srdf/" + SRDF_FILENAME
-URDF_SUBPATH = "/talos_data/robots/" + URDF_FILENAME
-
-modelPath = example_robot_data.getModelPath(URDF_SUBPATH)
-
-robotComplete = example_robot_data.load("talos")
-qComplete = robotComplete.model.referenceConfigurations["half_sitting"]
-
-locked_joints = [20,21,22,23,28,29,30,31]
-locked_joints += [32, 33]
-robot = robotComplete.buildReducedRobot(locked_joints, qComplete)
-rmodel: pin.Model = robot.model
-rdata: pin.Data = robot.data
 nq = rmodel.nq
 nv = rmodel.nv
 nu = nv - 6
@@ -51,7 +38,7 @@ FOOT_JOINT_IDS = {
 }
 
 controlled_joints = rmodel.names[1:].tolist()
-controlled_ids = [robotComplete.model.getJointId(name_joint) for name_joint in controlled_joints[1:]]
+controlled_ids = [rmodelComplete.getJointId(name_joint) for name_joint in controlled_joints[1:]]
 q0 = rmodel.referenceConfigurations["half_sitting"]
 
 pin.forwardKinematics(rmodel, rdata, q0)
@@ -61,7 +48,7 @@ device = BulletRobot(controlled_joints,
                         modelPath,
                         URDF_FILENAME,
                         1e-3,
-                        robotComplete.model)
+                        rmodelComplete)
 device.initializeJoints(qComplete)
 q_current, v_current = device.measureState()
 
@@ -142,7 +129,7 @@ v_ref = pin.Motion()
 v_ref.np[:] = 0.0
 
 def createStage(cs, cs_previous, LF_target, RF_target):
-    stage_rmodel = robot.model.copy()
+    stage_rmodel = rmodel.copy()
     stage_space = manifolds.MultibodyPhaseSpace(stage_rmodel)
 
     frame_vel_LF = aligator.FrameVelocityResidual(stage_space.ndx, nu, rmodel, v_ref, LF_id, pin.LOCAL)
