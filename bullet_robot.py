@@ -152,6 +152,15 @@ class BulletRobot:
             forces=max_forces,
         )
         p.stepSimulation()
+
+    def apply_force(self, force, position):
+        p.applyExternalForce(
+            self.robotId,
+            -1,
+            force,
+            position,
+            p.WORLD_FRAME
+        )
         
     def changeCamera(self,cameraDistance,cameraYaw,cameraPitch,cameraTargetPos):
         p.resetDebugVisualizerCamera(cameraDistance,

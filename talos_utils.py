@@ -170,10 +170,11 @@ def load_data(npz_file):
 
 class footTrajectory:
     def __init__(
-        self, start_pose_left, start_pose_right, T_ss, T_ds, nsteps, swing_apex, x_forward, y_gap, x_depth
+        self, start_pose_left, start_pose_right, T_ss, T_ds, nsteps, swing_apex, x_forward, y_forward, foot_angle, y_gap, x_depth
     ):
-        self.translationRight = np.array([x_forward, -y_gap, -x_depth])
+        self.translationRight = np.array([x_forward, -y_gap - y_forward, -x_depth])
         self.translationLeft = np.array([x_forward, y_gap, -x_depth])
+        self.rotationDiff = self.yawRotation(foot_angle)
 
         self.start_pose_left = start_pose_left
         self.start_pose_right = start_pose_right
@@ -198,21 +199,27 @@ class footTrajectory:
             #print("Update right trajectory")
             self.start_pose_right = RF_pose.copy()
             self.final_pose_right = LF_pose.copy()
-            self.final_pose_right.translation += self.translationRight
+            yawLeft = self.extractYaw(LF_pose.rotation)
+            self.final_pose_right.translation += self.yawRotation(yawLeft) @ self.translationRight
+            self.final_pose_right.rotation = self.rotationDiff @ self.final_pose_right.rotation
 
             self.start_pose_left = LF_pose.copy()
             self.final_pose_left = self.final_pose_right.copy()
-            self.final_pose_left.translation += self.translationLeft
+            yawRight = self.extractYaw(self.final_pose_right.rotation)
+            self.final_pose_left.translation += self.yawRotation(yawRight) @ self.translationLeft
 
         if takeoff_LF < self.T_ds and takeoff_LF >= 0:
             #print("Update left trajectory")
             self.start_pose_left = LF_pose.copy()
             self.final_pose_left = RF_pose.copy()
-            self.final_pose_left.translation += self.translationLeft
+            yawRight = self.extractYaw(RF_pose.rotation)
+            self.final_pose_left.translation += self.yawRotation(yawRight) @ self.translationLeft
 
             self.start_pose_right = RF_pose.copy()
             self.final_pose_right = self.final_pose_left.copy()
-            self.final_pose_right.translation += self.translationRight
+            yawLeft = self.extractYaw(self.final_pose_left.rotation)
+            self.final_pose_right.translation += self.yawRotation(yawLeft) @ self.translationRight
+            self.final_pose_right.rotation = self.rotationDiff @ self.final_pose_right.rotation
         
         swing_trajectory_left = self.defineBezier(
             self.swing_apex, 0, 1, self.start_pose_left, self.final_pose_left
@@ -287,6 +294,24 @@ class footTrajectory:
                 placement.append(swing_pose)
 
         return placement
+    
+    def yawRotation(self, yaw):
+        Ro = np.array(
+            [[np.cos(yaw), -np.sin(yaw), 0], [np.sin(yaw), np.cos(yaw), 0], [0, 0, 1]]
+        )
+        return Ro
+
+
+    def extractYaw(self, Ro):
+        return np.arctan2(Ro[1, 0], Ro[0, 0])
+
+def quaternion_multiply(quaternion1, quaternion0):
+    w0, x0, y0, z0 = quaternion0
+    w1, x1, y1, z1 = quaternion1
+    return np.array([-x1 * x0 - y1 * y0 - z1 * z0 + w1 * w0,
+                     x1 * w0 + y1 * z0 - z1 * y0 + w1 * x0,
+                     -x1 * z0 + y1 * w0 + z1 * x0 + w1 * y0,
+                     x1 * y0 - y1 * x0 + z1 * w0 + w1 * z0], dtype=np.float64)
 
 class IKSolver:
     def __init__(
@@ -439,7 +464,7 @@ class IK2Solver:
 
         return qddot 
 
-class IDSolver:
+class IDSolver_velocity:
     def __init__(
         self, model, weights, nk, mu, contact_ids, force_size, verbose: bool
     ):
@@ -501,7 +526,7 @@ class IDSolver:
 
         self.model = model
     
-    def computeMatrice(self, data, cs, v, a, forces, M):
+    def computeMatrice(self, data, cs, v, forces, M):
         nle = data.nle
         Jc = np.zeros((self.nk * self.force_size, self.model.nv))
         gamma = np.zeros(self.force_size * self.nk)
@@ -521,8 +546,8 @@ class IDSolver:
         self.A[:self.model.nv,self.model.nv + self.nk * self.force_size:] = -self.S
         self.A[self.model.nv:,:self.model.nv] = Jc 
 
-        self.b[:self.model.nv] = -nle - M @ a + JcT @ forces
-        self.b[self.model.nv:] = -gamma - Jc @ a
+        self.b[:self.model.nv] = -nle + JcT @ forces
+        self.b[self.model.nv:] = -gamma
         
         self.l = np.zeros(5 * self.nk)
         for i in range(self.nk):
@@ -539,6 +564,142 @@ class IDSolver:
         for j in range(self.nk):
             if cs[i]:
                 self.C[j * 5:(j + 1) * 5, self.model.nv + j * self.force_size:self.model.nv + (j + 1) * self.force_size] = self.Cmin
+
+
+    def solve(self, data, cs, v, forces, M):
+        self.computeMatrice(data, cs, v, forces, M)
+
+        self.qp.update(
+            A=self.A,
+            b=self.b,
+            C=self.C,
+            l=self.l,
+            update_preconditioner=False,
+        )
+        
+        self.qp.solve()
+
+        anew = self.qp.results.x[:self.model.nv]
+        dforces = self.qp.results.x[self.model.nv:self.model.nv + self.force_size * self.nk]
+        new_forces = forces + dforces
+        torque = self.qp.results.x[self.model.nv + self.force_size * self.nk:]
+
+        return anew, new_forces, torque 
+
+class IDSolver:
+    def __init__(
+        self, model, weights, nk, mu, L, W, contact_ids, force_size, verbose: bool
+    ):
+        kd = 2 * np.sqrt(100)
+        baum_Kd = np.array([kd,kd,kd])
+        self.baum_Kd = np.diag(baum_Kd)
+        self.nk = nk
+        self.contact_ids = contact_ids
+        self.mu = mu
+        self.L = L
+        self.W = W
+        self.force_size = force_size
+
+        n = 2 * model.nv - 6 + force_size * nk 
+        neq = model.nv + force_size * nk
+        nin = 9 * nk
+
+        self.A = np.zeros((model.nv + force_size * nk, 2 * model.nv - 6 + force_size * nk))
+        self.b = np.zeros(model.nv + force_size * nk)
+        self.l = np.zeros(9 * nk)
+        self.C = np.zeros((9 * nk, 2 * model.nv - 6 + force_size * nk))
+
+        self.S = np.zeros((model.nv,model.nv - 6))
+        self.S[6:,:] = np.eye(model.nv - 6)
+        
+        self.Cmin = np.zeros((9, force_size))
+        if force_size == 3:
+            self.Cmin = np.array([
+                [-1, 0, mu],
+                [1, 0, mu],
+                [-1, 0, mu],
+                [1, 0, mu],
+                [0, 0, 1],
+                [0, 0, 1],
+                [0, 0, 1],
+                [0, 0, 1],
+                [0, 0, 1]
+            ])
+        else:
+            self.Cmin = np.array([
+                [-1, 0, mu, 0, 0, 0],
+                [1, 0, mu, 0, 0, 0],
+                [-1, 0, mu, 0, 0, 0],
+                [1, 0, mu, 0, 0, 0],
+                [0, 0, 1, 0, 0, 0],
+                [0, 0, W, -1, 0, 0],
+                [0, 0, W, 1, 0, 0],
+                [0, 0, L, 0,-1, 0],
+                [0, 0, L, 0, 1, 0]
+            ])
+
+        u = np.ones(9 * nk) * 100000
+        g = np.zeros(n)
+        H = np.zeros((n,n))
+        H[:model.nv, :model.nv] = np.eye(model.nv) * weights[0]
+        H[model.nv:model.nv + force_size * nk,model.nv:model.nv + force_size * nk] = np.eye(force_size * nk) * weights[1]
+
+        qp = proxsuite.proxqp.dense.QP(
+            n, neq, nin, dense_backend=proxsuite.proxqp.dense.DenseBackend.PrimalDualLDLT)
+        qp.settings.eps_abs = 1e-3
+        qp.settings.eps_rel = 0.0
+        qp.settings.primal_infeasibility_solving = True
+        qp.settings.check_duality_gap = True
+        qp.settings.verbose = verbose
+        qp.settings.max_iter = 10
+        qp.settings.max_iter_in = 10
+        qp.init(H, g, self.A, self.b, self.C, self.l, u)
+        self.qp = qp
+
+        self.model = model
+    
+    def computeMatrice(self, data, cs, v, a, forces, M):
+        nle = data.nle
+        Jc = np.zeros((self.nk * self.force_size, self.model.nv))
+        gamma = np.zeros(self.force_size * self.nk)
+        for i in range(self.nk):
+            if cs[i]:
+                fJf = pin.getFrameJacobian(self.model, data, self.contact_ids[i], pin.LOCAL_WORLD_ALIGNED)[:self.force_size]
+                Jdot = pin.getFrameJacobianTimeVariation(self.model, data, self.contact_ids[i], pin.LOCAL_WORLD_ALIGNED)[:self.force_size]
+                Jc[i * self.force_size:(i+1) * self.force_size,:] = fJf
+                gamma[i * self.force_size:(i+1) * self.force_size] = Jdot @ v
+                #gamma[i * self.force_size:i * self.force_size + 3] += self.baum_Kp @ data.oMf[contact_ids[i]].rotation.T @ (data.oMf[contact_ids[i]].translation - feet_refs[i])
+                gamma[i * self.force_size:i * self.force_size + 3] += self.baum_Kd @ pin.getFrameVelocity(self.model, data, self.contact_ids[i]).linear \
+                  + self.baum_Kd @ pin.getFrameVelocity(self.model, data, self.contact_ids[i]).angular
+
+        JcT = Jc.T
+        self.A[:self.model.nv,:self.model.nv] = M 
+        self.A[:self.model.nv,self.model.nv:self.model.nv + self.nk * self.force_size] = -JcT
+        self.A[:self.model.nv,self.model.nv + self.nk * self.force_size:] = -self.S
+        self.A[self.model.nv:,:self.model.nv] = Jc 
+
+        self.b[:self.model.nv] = -nle - M @ a + JcT @ forces
+        self.b[self.model.nv:] = -gamma - Jc @ a
+        
+        self.l = np.zeros(9 * self.nk)
+        for i in range(self.nk):
+            if cs[i]:
+                self.l[i * 9:(i+1)*9] = np.array([
+                    forces[i * self.force_size] - forces[i * self.force_size + 2] * self.mu,
+                    -forces[i * self.force_size] - forces[i * self.force_size + 2] * self.mu,
+                    forces[i * self.force_size + 1] - forces[i * self.force_size + 2] * self.mu,
+                    -forces[i * self.force_size + 1] - forces[i * self.force_size + 2] * self.mu,
+                    - forces[i * self.force_size + 2],
+                    forces[i * self.force_size + 3] - forces[i * self.force_size + 2] * self.W,
+                    -forces[i * self.force_size + 3] - forces[i * self.force_size + 2] * self.W,
+                    forces[i * self.force_size + 4] - forces[i * self.force_size + 2] * self.L,
+                    -forces[i * self.force_size + 4] - forces[i * self.force_size + 2] * self.L
+                ]) 
+
+        self.C = np.zeros((9 * self.nk, 2 * self.model.nv - 6 + self.force_size * self.nk))
+        for j in range(self.nk):
+            if cs[i]:
+                self.C[j * 9:(j + 1) * 9, self.model.nv + j * self.force_size:self.model.nv + (j + 1) * self.force_size] = self.Cmin
 
 
     def solve(self, data, cs, v, a, forces, M):
@@ -564,7 +725,7 @@ class IDSolver:
 
 class IKIDSolver_f6:
     def __init__(
-        self, model, weights, K_gains, nk, mu, contact_ids, base_id, torso_id, force_size, verbose: bool
+        self, model, weights, K_gains, nk, mu, L, W, contact_ids, base_id, torso_id, force_size, verbose: bool
     ):
         
         self.K_gains = K_gains
@@ -577,28 +738,34 @@ class IKIDSolver_f6:
         self.base_id = base_id
         self.torso_id = torso_id
         self.mu = mu
+        self.W = W
+        self.L = L
         self.force_size = force_size
         self.weights = weights
 
         n = 2 * model.nv - 6 + force_size * nk 
         neq = model.nv + force_size * nk
-        nin = 5 * nk
+        nin = 9 * nk
         
         self.A = np.zeros((model.nv + force_size * nk, 2 * model.nv - 6 + force_size * nk))
         self.b = np.zeros(model.nv + force_size * nk) #
-        self.l = np.zeros(5 * nk)
-        self.C = np.zeros((5 * nk, 2 * model.nv - 6 + force_size * nk))
+        self.l = np.zeros(9 * nk)
+        self.C = np.zeros((9 * nk, 2 * model.nv - 6 + force_size * nk))
 
         self.S = np.zeros((model.nv,model.nv - 6))
         self.S[6:,:] = np.eye(model.nv - 6)
         
-        self.Cmin = np.zeros((5, force_size))
+        self.Cmin = np.zeros((9, force_size))
         if force_size == 3:
             self.Cmin = np.array([
                 [-1, 0, mu],
                 [1, 0, mu],
                 [-1, 0, mu],
                 [1, 0, mu],
+                [0, 0, 1],
+                [0, 0, 1],
+                [0, 0, 1],
+                [0, 0, 1],
                 [0, 0, 1]
             ])
         else:
@@ -607,10 +774,14 @@ class IKIDSolver_f6:
                 [1, 0, mu, 0, 0, 0],
                 [-1, 0, mu, 0, 0, 0],
                 [1, 0, mu, 0, 0, 0],
-                [0, 0, 1, 0, 0, 0]
+                [0, 0, 1, 0, 0, 0],
+                [0, 0, W, -1, 0, 0],
+                [0, 0, W, 1, 0, 0],
+                [0, 0, L, 0,-1, 0],
+                [0, 0, L, 0, 1, 0]
             ])
 
-        u = np.ones(5 * nk) * 100000
+        u = np.ones(9 * nk) * 100000
         self.g = np.zeros(n)
         self.H = np.zeros((n,n))
         self.H[model.nv:model.nv + force_size * nk,model.nv:model.nv + force_size * nk] = np.eye(force_size * nk) * weights[4]
@@ -687,21 +858,25 @@ class IKIDSolver_f6:
             self.b[self.model.nv + 6:self.model.nv + 12] = -dJ_right @ v
             #self.b[self.model.nv + 6:self.model.nv + 9] -= self.baum_Kd @ pin.getFrameVelocity(self.model, data, self.contact_ids[1]).linear
         
-        self.l = np.zeros(5 * self.nk)
+        self.l = np.zeros(9 * self.nk)
         for i in range(self.nk):
             if cs[i]:
-                self.l[i * 5:(i+1)*5] = np.array([
+                self.l[i * 9:(i+1)*9] = np.array([
                     forces[i * self.force_size] - forces[i * self.force_size + 2] * self.mu,
                     -forces[i * self.force_size] - forces[i * self.force_size + 2] * self.mu,
                     forces[i * self.force_size + 1] - forces[i * self.force_size + 2] * self.mu,
                     -forces[i * self.force_size + 1] - forces[i * self.force_size + 2] * self.mu,
-                    - forces[i * self.force_size + 2]
+                    - forces[i * self.force_size + 2],
+                    forces[i * self.force_size + 3] - forces[i * self.force_size + 2] * self.W,
+                    -forces[i * self.force_size + 3] - forces[i * self.force_size + 2] * self.W,
+                    forces[i * self.force_size + 4] - forces[i * self.force_size + 2] * self.L,
+                    -forces[i * self.force_size + 4] - forces[i * self.force_size + 2] * self.L
                 ]) 
 
-        self.C = np.zeros((5 * self.nk, 2 * self.model.nv - 6 + self.force_size * self.nk))
+        self.C = np.zeros((9 * self.nk, 2 * self.model.nv - 6 + self.force_size * self.nk))
         for j in range(self.nk):
             if cs[i]:
-                self.C[j * 5:(j + 1) * 5, self.model.nv + j * self.force_size:self.model.nv + (j + 1) * self.force_size] = self.Cmin
+                self.C[j * 9:(j + 1) * 9, self.model.nv + j * self.force_size:self.model.nv + (j + 1) * self.force_size] = self.Cmin
 
 
     def solve(self, data, cs, v, q_diff, dq_diff, LF_diff, dLF_diff, RF_diff, dRF_diff, base_diff, dbase_diff, torso_diff, dtorso_diff, forces, dH, M):
@@ -918,21 +1093,21 @@ def compute_ID_references(space, rmodel, rdata, LF_id, RF_id, base_id, torso_id,
     dq_diff = -space.difference(x0_multibody, x_measured)[rmodel.nv:]
     LF_diff = np.zeros(6)
     LF_diff[:3] = LF_refs[0].translation - rdata.oMf[LF_id].translation
-    LF_diff[3:] = -pin.log3(rdata.oMf[LF_id].rotation)
+    LF_diff[3:] = -pin.log3(LF_refs[0].rotation.T @ rdata.oMf[LF_id].rotation)
     RF_diff = np.zeros(6)
     RF_diff[:3] = RF_refs[0].translation - rdata.oMf[RF_id].translation
-    RF_diff[3:] = -pin.log3(rdata.oMf[RF_id].rotation)
+    RF_diff[3:] = -pin.log3(RF_refs[0].rotation.T @ rdata.oMf[RF_id].rotation)
 
     dLF_diff = np.zeros(6)
     dLF_diff[:3] = (LF_refs[1].translation - LF_refs[0].translation) / dt - LF_vel_lin
-    dLF_diff[3:] = -LF_vel_ang
+    dLF_diff[3:] = pin.log3(LF_refs[0].rotation.T @ LF_refs[1].rotation) / dt -LF_vel_ang
     dRF_diff = np.zeros(6)
     dRF_diff[:3] = (RF_refs[1].translation - RF_refs[0].translation) / dt - RF_vel_lin
-    dRF_diff[3:] = -RF_vel_ang
+    dRF_diff[3:] = pin.log3(RF_refs[0].rotation.T @ RF_refs[1].rotation) / dt - RF_vel_ang
 
-    base_diff = -pin.log3(rdata.oMf[base_id].rotation)
-    torso_diff = -pin.log3(rdata.oMf[torso_id].rotation)
-    dbase_diff = -pin.getFrameVelocity(rmodel,rdata,base_id,pin.LOCAL).angular
-    dtorso_diff = -pin.getFrameVelocity(rmodel,rdata,torso_id,pin.LOCAL).angular
+    base_diff = -pin.log3(RF_refs[0].rotation.T @ rdata.oMf[base_id].rotation)
+    torso_diff = -pin.log3(RF_refs[0].rotation.T @ rdata.oMf[torso_id].rotation)
+    dbase_diff = pin.log3(RF_refs[0].rotation.T @ RF_refs[1].rotation) / dt -pin.getFrameVelocity(rmodel,rdata,base_id,pin.LOCAL).angular
+    dtorso_diff = pin.log3(RF_refs[0].rotation.T @ RF_refs[1].rotation) / dt -pin.getFrameVelocity(rmodel,rdata,torso_id,pin.LOCAL).angular
 
     return q_diff, dq_diff, LF_diff, dLF_diff, RF_diff, dRF_diff, base_diff, dbase_diff, torso_diff, dtorso_diff

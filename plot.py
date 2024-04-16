@@ -37,7 +37,7 @@ def computeCoP(LF_pose, RF_pose, LF_force, LF_torque, RF_force, RF_torque):
     
     return cop_total
 
-data = load_data("tmp/centroidal_f6.npz") # kinodynamics_f3 fulldynamics centroidal
+data = load_data("tmp/kinodynamics_f6.npz") # kinodynamics_f6 fulldynamics centroidal_f6
 xs = data["xs"]
 us = data["us"]
 com = data["com"]
@@ -207,6 +207,23 @@ axs[2,1].plot(ttl, RF_trans[:,2])
 axs[2,1].plot(ttl, RF_trans_ref[:,2], 'r')
 axs[2,1].grid(True)
 axs[2,1].set_title('RF z')
+
+# Joint power
+nq = 29
+nv = 28
+nu = 22
+power = []
+for i in range(Tx):
+    pp = np.abs(us[i] * xs[i][nq + 6:])
+    power.append(np.sum(pp))
+
+plt.figure()
+plt.title('Total joint power')
+plt.grid(True)
+plt.ylabel('Watt')
+plt.xlabel('Time')
+plt.plot(ttx, power)
+print("Mean power is " + str(np.mean(power)))
 
 BINS = 50
 plt.figure("Computational load for 1 MPC iteration")

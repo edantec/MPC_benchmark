@@ -94,7 +94,7 @@ for fname, fid in FOOT_FRAME_IDS.items():
         pl1,
         0,
         pl2,
-        pin.LOCAL,
+        pin.LOCAL_WORLD_ALIGNED,
     )
     cm.corrector.Kp[:] = (0.1, 0.1, 1, 0.1, 0.1, 0.1)
     cm.corrector.Kd[:] = (5, 5, 5, 5, 5, 5)
@@ -169,12 +169,16 @@ def createStage(cs, cs_previous, LF_target, RF_target):
     """
     ctrl_fn = aligator.ControlErrorResidual(stage_space.ndx, np.zeros(nu))
     stm.addConstraint(ctrl_fn, constraints.BoxConstraint(umin, umax)) """
+    """ if cs[0]:
+        stm.addConstraint(frame_vel_LF, constraints.EqualityConstraintSet())
+    if cs[1]:
+        stm.addConstraint(frame_vel_RF, constraints.EqualityConstraintSet())  """
 
     if cs[1] and not(cs_previous[1]):
-        stm.addConstraint(frame_cs_RF, constraints.EqualityConstraintSet())
+        #stm.addConstraint(frame_cs_RF, constraints.EqualityConstraintSet())
         stm.addConstraint(frame_vel_RF, constraints.EqualityConstraintSet())
     if cs[0] and not(cs_previous[0]):
-        stm.addConstraint(frame_cs_LF, constraints.EqualityConstraintSet()) 
+        #stm.addConstraint(frame_cs_LF, constraints.EqualityConstraintSet()) 
         stm.addConstraint(frame_vel_LF, constraints.EqualityConstraintSet())
     return stm
 
@@ -182,14 +186,14 @@ term_cost = aligator.CostStack(space, nu)
 #term_cost.addCost(aligator.QuadraticStateCost(space, nu, x0, 100 * w_x))
 
 """ Define gait and time parameters"""
-T_ds = 10
-T_ss = 60
+T_ds = 20
+T_ss = 80
 dt = 0.01
 nsteps = 100
 Nsimu = int(dt / 0.001)
 
 """ Define contact sequence throughout horizon"""
-total_steps = 4
+total_steps = 7
 contact_phases = [[True,True]] * T_ds
 for s in range(total_steps):
     contact_phases += [[True,False]] * T_ss + \
@@ -217,12 +221,14 @@ Tmpc = len(contact_phases)
 
 """ Define feet trajectory """
 swing_apex = 0.15
-x_forward = 0.2
+x_forward = 0.1
+y_forward = 0.1
+foot_yaw = 0
 y_gap = 0.18
 x_depth = 0.0
 
 foottraj = footTrajectory(
-    rdata.oMf[LF_id].copy(), rdata.oMf[RF_id].copy(), T_ss, T_ds, nsteps, swing_apex, x_forward, y_gap, x_depth
+    rdata.oMf[LF_id].copy(), rdata.oMf[RF_id].copy(), T_ss, T_ds, nsteps, swing_apex, x_forward, y_forward, foot_yaw, y_gap, x_depth
 )
 
 stages_full = [createStage(contact_phases[0],contact_phases[0], LF_placement.copy(), RF_placement.copy())]
@@ -238,7 +244,7 @@ mu_init = 1e-8
 rho_init = 0.0
 max_iters = 100
 verbose = aligator.VerboseLevel.VERBOSE
-solver = aligator.SolverProxDDP(TOL, mu_init, rho_init) #, verbose=verbose)
+solver = aligator.SolverProxDDP(TOL, mu_init, rho_init)
 #solver = aligator.SolverFDDP(TOL, verbose=verbose)
 solver.rollout_type = aligator.ROLLOUT_LINEAR
 #print("LDLT algo choice:", solver.ldlt_algo_choice)
@@ -290,7 +296,7 @@ L_measured = []
 
 device.showTargetToTrack(LF_placement, RF_placement)
 for t in range(Tmpc):
-    #print("Time " + str(t))
+    print("Time " + str(t))
 
     pin.forwardKinematics(rmodel, rdata, x_measured[:nq])
     pin.updateFramePlacements(rmodel, rdata)
@@ -335,8 +341,6 @@ for t in range(Tmpc):
         torque_left.append(np.zeros(3))
         torque_right.append(np.zeros(3))
     
-    u_multibody.append(us[0])
-    x_multibody.append(xs[0])
     LF_measured.append(rdata.oMf[LF_id].copy())
     RF_measured.append(rdata.oMf[RF_id].copy())
     LF_references.append(LF_refs[0].copy())
@@ -367,6 +371,10 @@ for t in range(Tmpc):
     problem.removeTerminalConstraint()
     problem.addTerminalConstraint(term_constraint_com)
 
+    """ if t == 150:
+        print("Force applied")
+        device.apply_force([6000, 0,0], [0, 0, 0]) """
+
     for j in range(Nsimu):
         time.sleep(0.001)
         q_current, v_current = device.measureState()
@@ -379,6 +387,9 @@ for t in range(Tmpc):
 
         current_torque = us[0] - K0 @ space.difference(x_measured, xs[0])
         device.execute(current_torque)
+
+        u_multibody.append(current_torque)
+        x_multibody.append(x_measured)
 
     xs = xs[1:] + [xs[-1]]
     us = us[1:] + [us[-1]]
@@ -397,8 +408,8 @@ for t in range(Tmpc):
     us = solver.results.us.tolist().copy()
     K0 = solver.results.controlFeedbacks()[0]
 
-print("Elapsed time:")
-print(np.mean(np.array(solve_time)))
+#print("Elapsed time:")
+#print(np.mean(np.array(solve_time)))
 
 
 force_left = np.array(force_left)

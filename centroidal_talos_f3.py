@@ -112,12 +112,14 @@ T_mpc = len(contact_phases)  # Size of the problem
 
 """ Define feet trajectory """
 swing_apex = 0.15
-x_forward = 0.2
+x_forward = 0
+y_forward = 0
+foot_yaw = 0
 y_gap = 0.18
 x_depth = 0.0
 
 foottraj = footTrajectory(
-    rdata.oMf[LF_id].copy(), rdata.oMf[RF_id].copy(), T_ss, T_ds, nsteps, swing_apex, x_forward, y_gap, x_depth
+    rdata.oMf[LF_id].copy(), rdata.oMf[RF_id].copy(), T_ss, T_ds, nsteps, swing_apex, x_forward, y_forward, y_gap, foot_yaw, x_depth
 )
 
 """ Create dynamics and costs """
@@ -182,7 +184,7 @@ def createStage(contact_state, LF_pose, RF_pose):
     for i in range(len(coins_boolean)):
         if coins_boolean[i]:
             cone_cstr = aligator.FrictionConeResidual(space.ndx, nu, i, mu, 0)
-            #stm.addConstraint(cone_cstr, constraints.NegativeOrthant())
+            stm.addConstraint(cone_cstr, constraints.NegativeOrthant())
 
     return stm
 
@@ -261,7 +263,6 @@ L_measured = []
 weights_IK = [100, 10000, 10, 500] # Posture, feet tracking, centroidal tracking, base angle
 weights_ID = [10000, 100]
 
-
 g_p = 200
 g_h = 10
 g_b = 10
@@ -286,8 +287,6 @@ x0_multibody = np.concatenate((q0, np.zeros(rmodel.nv)))
 qdot_prev = np.zeros(rmodel.nv)
 qdot = np.zeros(rmodel.nv)
 qddot = np.zeros(rmodel.nv)
-LF_vel_ref = np.zeros(6)
-RF_vel_ref = np.zeros(6)
 
 previous_contact_state = [True, True]
 device.showTargetToTrack(rdata.oMf[LF_id], rdata.oMf[RF_id])
@@ -401,27 +400,6 @@ for t in range(T_mpc):
         M = pin.crba(rmodel, rdata, x_measured[:nq])
         pin.nonLinearEffects(rmodel, rdata, x_measured[:nq], x_measured[nq:])
         pin.dccrba(rmodel,rdata, x_measured[:nq], x_measured[nq:])
-        """ qddot = IK2_solver.solve(
-            rdata,
-            x_measured[nq:], 
-            q_diff, dq_diff, 
-            LF_diff, RF_diff, 
-            dLF_diff, dRF_diff, 
-            dH, 
-            base_diff, dbase_diff, 
-            torso_diff, dtorso_diff
-        ) """
-        
-        """ qdot = IK_solver.solve(
-            rdata,
-            x_measured[:nq],
-            dq_ref,
-            LF_vel_ref,
-            RF_vel_ref,
-            base_vel_ref,
-            torso_vel_ref,
-            xs[0][3:9]
-        ) """
 
         new_x = np.zeros(9)
         new_x[:3] = pin.centerOfMass(rmodel, rdata, x_measured[:nq])
