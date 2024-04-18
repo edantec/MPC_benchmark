@@ -189,7 +189,7 @@ def createStage(contact_state, LF_pose, RF_pose):
     stm = aligator.StageModel(rcost, create_dynamics(contact_map))
     for i in range(len(contact_state)):
         if contact_state[i]:
-            cone_cstr = aligator.WrenchConeResidual(space.ndx, nu, i, mu, Lfoot, Wfoot, np.eye(3))
+            cone_cstr = aligator.WrenchConeResidual(space.ndx, nu, i, mu, Lfoot, Wfoot)
             stm.addConstraint(cone_cstr, constraints.NegativeOrthant())
 
     return stm
@@ -295,6 +295,9 @@ RF_vel_ref = np.zeros(6)
 previous_contact_state = [True, True]
 device.showTargetToTrack(rdata.oMf[LF_id], rdata.oMf[RF_id])
 
+lowlevel_time = 0
+time_computation = 0.01
+
 """ Launch the MPC loop"""
 
 for t in range(T_mpc):
@@ -378,8 +381,9 @@ for t in range(T_mpc):
         print("Force applied")
         device.apply_force([0, -10000,0], [0,-0.1, 0]) """
 
+    #while lowlevel_time < time_computation:
     for j in range(Nsimu):
-        time.sleep(0.001)
+        lowlevel_time += 0.001
         q_current, v_current = device.measureState()
         
         x_measured = shapeState(q_current, 
@@ -425,6 +429,7 @@ for t in range(T_mpc):
         u_multibody.append(torque)
         device.execute(torque)
     
+    lowlevel_time = 0
     previous_contact_state = copy.deepcopy(contact_state)
     com_measured.append(new_x[:3])
     L_measured.append(rdata.hg.angular.copy())
@@ -438,7 +443,8 @@ for t in range(T_mpc):
     solver.run(problem, xs, us)
     end = time.time()
     solve_time.append(end - start)
-    #print(end - start)
+    time_computation = end - start
+    print(end - start)
 
     xs = solver.results.xs.tolist().copy()
     us = solver.results.us.tolist().copy()

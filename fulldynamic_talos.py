@@ -221,8 +221,8 @@ Tmpc = len(contact_phases)
 
 """ Define feet trajectory """
 swing_apex = 0.15
-x_forward = 0.1
-y_forward = 0.1
+x_forward = 0.2
+y_forward = 0.
 foot_yaw = 0
 y_gap = 0.18
 x_depth = 0.0
@@ -248,7 +248,7 @@ solver = aligator.SolverProxDDP(TOL, mu_init, rho_init)
 #solver = aligator.SolverFDDP(TOL, verbose=verbose)
 solver.rollout_type = aligator.ROLLOUT_LINEAR
 #print("LDLT algo choice:", solver.ldlt_algo_choice)
-#solver.linear_solver_choice = aligator.LQ_SOLVER_PARALLEL #LQ_SOLVER_SERIAL
+solver.linear_solver_choice = aligator.LQ_SOLVER_SERIAL #LQ_SOLVER_SERIAL
 solver.force_initial_condition = True
 #solver.setNumThreads(8)
 solver.max_iters = max_iters
@@ -295,6 +295,8 @@ solve_time = []
 L_measured = []
 
 device.showTargetToTrack(LF_placement, RF_placement)
+lowlevel_time = 0
+time_computation = 0.01
 for t in range(Tmpc):
     print("Time " + str(t))
 
@@ -321,20 +323,20 @@ for t in range(Tmpc):
 
     if problem.stages[0].dyn_model.differential_dynamics.constraint_models.__len__() == 1:
         if problem.stages[0].dyn_model.differential_dynamics.constraint_models[0].name == 'left_sole_link':
-            force_left.append(solver.workspace.problem_data.stage_data[0].constraint_data[0].continuous_data.constraint_datas[0].contact_force.linear)
+            force_left.append(solver.workspace.problem_data.stage_data[0].dynamics_data.continuous_data.constraint_datas[0].contact_force.linear)
             force_right.append(np.zeros(3))
-            torque_left.append(solver.workspace.problem_data.stage_data[0].constraint_data[0].continuous_data.constraint_datas[0].contact_force.angular)
+            torque_left.append(solver.workspace.problem_data.stage_data[0].dynamics_data.continuous_data.constraint_datas[0].contact_force.angular)
             torque_right.append(np.zeros(3))
         else:
-            force_right.append(solver.workspace.problem_data.stage_data[0].constraint_data[0].continuous_data.constraint_datas[0].contact_force.linear)
+            force_right.append(solver.workspace.problem_data.stage_data[0].dynamics_data.continuous_data.constraint_datas[0].contact_force.linear)
             force_left.append(np.zeros(3))
-            torque_right.append(solver.workspace.problem_data.stage_data[0].constraint_data[0].continuous_data.constraint_datas[0].contact_force.angular)
+            torque_right.append(solver.workspace.problem_data.stage_data[0].dynamics_data.continuous_data.constraint_datas[0].contact_force.angular)
             torque_left.append(np.zeros(3))
     elif problem.stages[0].dyn_model.differential_dynamics.constraint_models.__len__() == 2:
-        force_left.append(solver.workspace.problem_data.stage_data[0].constraint_data[0].continuous_data.constraint_datas[0].contact_force.linear)
-        force_right.append(solver.workspace.problem_data.stage_data[0].constraint_data[0].continuous_data.constraint_datas[1].contact_force.linear)
-        torque_left.append(solver.workspace.problem_data.stage_data[0].constraint_data[0].continuous_data.constraint_datas[0].contact_force.angular)
-        torque_right.append(solver.workspace.problem_data.stage_data[0].constraint_data[0].continuous_data.constraint_datas[1].contact_force.angular)
+        force_left.append(solver.workspace.problem_data.stage_data[0].dynamics_data.continuous_data.constraint_datas[0].contact_force.linear)
+        force_right.append(solver.workspace.problem_data.stage_data[0].dynamics_data.continuous_data.constraint_datas[1].contact_force.linear)
+        torque_left.append(solver.workspace.problem_data.stage_data[0].dynamics_data.continuous_data.constraint_datas[0].contact_force.angular)
+        torque_right.append(solver.workspace.problem_data.stage_data[0].dynamics_data.continuous_data.constraint_datas[1].contact_force.angular)
     else:
         force_right.append(np.zeros(3))
         force_left.append(np.zeros(3))
@@ -376,7 +378,8 @@ for t in range(Tmpc):
         device.apply_force([6000, 0,0], [0, 0, 0]) """
 
     for j in range(Nsimu):
-        time.sleep(0.001)
+    #while lowlevel_time < time_computation:
+        lowlevel_time += 0.001
         q_current, v_current = device.measureState()
         
         x_measured = shapeState(q_current, 
@@ -390,7 +393,8 @@ for t in range(Tmpc):
 
         u_multibody.append(current_torque)
         x_multibody.append(x_measured)
-
+    
+    lowlevel_time = 0
     xs = xs[1:] + [xs[-1]]
     us = us[1:] + [us[-1]]
     xs[0] = x_measured
@@ -401,6 +405,7 @@ for t in range(Tmpc):
     start = time.time()
     solver.run(problem, xs, us)
     end = time.time()
+    time_computation = end - start
     solve_time.append(end - start)
     print("solver.run = " + str(end - start))
 
