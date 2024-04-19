@@ -1,6 +1,8 @@
+print("Start script")
 import numpy as np
-import aligator
 import pinocchio as pin
+import aligator
+print("Import aligator")
 from bullet_robot import BulletRobot
 import time
 import copy
@@ -19,6 +21,7 @@ from aligator import (manifolds,
                     dynamics, 
                     constraints,)
 
+print("Load robot model")
 rmodelComplete, rmodel, qComplete, q0 = loadTalos()
 rdata = rmodel.createData()
 space = manifolds.MultibodyPhaseSpace(rmodel)
@@ -52,6 +55,7 @@ controlled_joints = rmodel.names[1:].tolist()
 controlled_ids = [rmodelComplete.getJointId(name_joint) for name_joint in controlled_joints[1:]]
 
 """ Initialize simulation"""
+print("Initialize simu")
 device = BulletRobot(controlled_joints,
                      modelPath,
                      URDF_FILENAME,
@@ -64,22 +68,22 @@ sole_ids = [LF_id, RF_id]
 
 """ Create costs and dynamics"""
 w_x = np.array([
-    0, 0, 0, 1000, 1000, 1000, # Base pos/ori
+    0, 0, 0, 100, 100, 100, # Base pos/ori
     0.1, 0.1, 0.1, 0.1, 0.1, 0.1, # Left leg
     0.1, 0.1, 0.1, 0.1, 0.1, 0.1, # Right leg
-    1000, 1000, # Torso
-    10, 100, 100, 10, # Left arm
-    10, 100, 100, 10, # Right arm
+    100, 100, # Torso
+    1, 10, 10, 1, # Left arm
+    1, 10, 10, 1, # Right arm
     0.1, 0.1, 0.1, 100, 100, 100, # Base pos/ori vel
     1, 1, 1, 1, 10, 10, # Left leg vel
     1, 1, 1, 1, 10, 10, # Right leg vel
     100, 100, # Torso vel
-    10, 100, 100, 10, # Left arm vel
-    10, 100, 100, 10, # Right arm vel
+    1, 10, 10, 1, # Left arm vel
+    1, 10, 10, 1, # Right arm vel
 ]) 
-w_x = np.diag(w_x) 
-w_linforce = np.ones(3) * 0.001
-w_angforce = np.ones(3) * 0.1
+w_x = np.diag(w_x)
+w_linforce = np.ones(3) * 0.00001
+w_angforce = np.ones(3) * 0.001
 w_u = np.concatenate((
     w_linforce, 
     w_angforce,
@@ -89,10 +93,10 @@ w_u = np.concatenate((
 ))
 w_u = np.diag(w_u) 
 w_LFRF = 50000
-w_cent_lin = np.ones(3) * 1e-2
-w_cent_ang = np.ones(3) * 1e-1
+w_cent_lin = np.ones(3) * 1e-4
+w_cent_ang = np.ones(3) * 1e-4
 w_cent = np.diag(np.concatenate((w_cent_lin,w_cent_ang)))
-w_com = np.diag(np.array([0]))
+w_com = np.diag(np.array([1000]))
 
 def create_dynamics(stage_space, cont_states):
     ode = dynamics.KinodynamicsFwdDynamics(
@@ -104,7 +108,7 @@ def create_dynamics(stage_space, cont_states):
 v_ref = pin.Motion()
 v_ref.np[:] = 0.0
 
-def createStage(contact_state, contact_state_previous, LF_pose, RF_pose):
+def createStage(contact_state, contact_state_previous, LF_pose, RF_pose, uforce):
     stage_rmodel = rmodel.copy()
     stage_space = manifolds.MultibodyPhaseSpace(stage_rmodel)
 
@@ -112,8 +116,8 @@ def createStage(contact_state, contact_state_previous, LF_pose, RF_pose):
         stage_space.ndx, stage_rmodel, gravity, contact_state, sole_ids, force_size
     )
 
-    frame_vel_LF = aligator.FrameVelocityResidual(stage_space.ndx, nu, stage_rmodel, v_ref, LF_id, pin.LOCAL_WORLD_ALIGNED)
-    frame_vel_RF = aligator.FrameVelocityResidual(stage_space.ndx, nu, stage_rmodel, v_ref, RF_id, pin.LOCAL_WORLD_ALIGNED)
+    frame_vel_LF = aligator.FrameVelocityResidual(stage_space.ndx, nu, stage_rmodel, v_ref, LF_id, pin.LOCAL)
+    frame_vel_RF = aligator.FrameVelocityResidual(stage_space.ndx, nu, stage_rmodel, v_ref, RF_id, pin.LOCAL)
 
     frame_fn_LF = aligator.FramePlacementResidual(
         stage_space.ndx, nu, stage_rmodel, LF_pose, LF_id)
@@ -128,17 +132,14 @@ def createStage(contact_state, contact_state_previous, LF_pose, RF_pose):
     rcost = aligator.CostStack(stage_space, nu)
 
     rcost.addCost(aligator.QuadraticStateCost(stage_space, nu, x0, w_x))
-    rcost.addCost(aligator.QuadraticControlCost(stage_space, u00, w_u))
+    rcost.addCost(aligator.QuadraticControlCost(stage_space, uforce, w_u))
     w_LF = np.zeros((6,6))
     w_RF = np.zeros((6,6))
     if contact_state[0]: #and not(contact_state[1]):
         w_RF = w_LFRF * np.eye(6)
     if contact_state[1]: #and not(contact_state[0]):
         w_LF = w_LFRF * np.eye(6)
-    """ if not(contact_state_previous[0]) and contact_state[0]:
-        w_LF = 100 * w_LFRF * np.eye(6)
-    if not(contact_state_previous[1]) and contact_state[1]:
-        w_RF = 100 * w_LFRF * np.eye(6) """
+
     rcost.addCost(aligator.QuadraticResidualCost(stage_space, frame_fn_LF, w_LF))
     rcost.addCost(aligator.QuadraticResidualCost(stage_space, frame_fn_RF, w_RF))
     rcost.addCost(aligator.QuadraticResidualCost(stage_space, cent_mom, w_cent))
@@ -148,18 +149,18 @@ def createStage(contact_state, contact_state_previous, LF_pose, RF_pose):
     
     for i in range(len(contact_state)):
         if contact_state[i]:
-            cone_cstr = aligator.WrenchConeResidual(space.ndx, nu, i, mu, Lfoot, Wfoot) #np.eye(3)
+            cone_cstr = aligator.WrenchConeResidual(space.ndx, nu, i, mu, 3/5*Lfoot, 3/5*Wfoot) #np.eye(3)
             stm.addConstraint(cone_cstr, constraints.NegativeOrthant())
     
     if contact_state[0]:
         stm.addConstraint(frame_vel_LF, constraints.EqualityConstraintSet())
     if contact_state[1]:
         stm.addConstraint(frame_vel_RF, constraints.EqualityConstraintSet()) 
-
+    """
     if contact_state[1] and not(contact_state_previous[1]):
         stm.addConstraint(frame_cs_RF, constraints.EqualityConstraintSet())
     if contact_state[0] and not(contact_state_previous[0]):
-        stm.addConstraint(frame_cs_LF, constraints.EqualityConstraintSet())
+        stm.addConstraint(frame_cs_LF, constraints.EqualityConstraintSet()) """
     return stm
 
 term_cost = aligator.CostStack(space, nu)
@@ -173,7 +174,7 @@ nsteps = 100
 Nsimu = int(dt / 0.001)
 
 """ Define contact sequence throughout horizon"""
-total_steps = 5
+total_steps = 6
 contact_phases = [[True,True]] * T_ds
 for s in range(total_steps):
     contact_phases += [[True,False]] * T_ss + \
@@ -182,6 +183,45 @@ for s in range(total_steps):
                       [[True,True]] * T_ds
 
 contact_phases += [[True,True]] * nsteps
+
+f_full = -mass * gravity[2]
+f_half = -mass * gravity[2] / 2.
+urefs = []
+for i in range(total_steps):
+    for j in range(T_ds):
+        un = np.zeros(nu)
+        if i == 0:
+            un[2] = f_full * j / T_ds + f_half * (T_ds - j) / T_ds
+            un[8] = f_half * (T_ds - j) / T_ds 
+        else:
+            un[2] = f_full * (j + 1) / T_ds
+            un[8] = f_full * (T_ds - j) / T_ds 
+        urefs.append(un)
+    for j in range(T_ss):
+        un = np.zeros(nu)
+        un[2] = f_full
+        urefs.append(un)
+    for j in range(T_ds):
+        un = np.zeros(nu)
+        un[2] = f_full * (T_ds - j) / T_ds
+        un[8] = f_full * (j + 1) / T_ds 
+        urefs.append(un)
+    for j in range(T_ss):
+        un = np.zeros(nu)
+        un[8] = f_full
+        urefs.append(un)
+
+for j in range(T_ds):
+    un = np.zeros(nu)
+    un[2] = f_half * (j + 1) / float(T_ds)
+    un[8] = f_full * (T_ds - j) / float(T_ds) + f_half * j / float(T_ds)
+    urefs.append(un)
+
+for j in range(nsteps):
+    un = np.zeros(nu)
+    un[2] = f_half 
+    un[8] = f_half 
+    urefs.append(un)
 
 takeoff_RFs = []
 takeoff_LFs = []
@@ -212,26 +252,28 @@ foottraj = footTrajectory(
 )
 
 """ Create the optimal problem and the full horizon """
-stages_full = [createStage(contact_phases[0], contact_phases[0], rdata.oMf[LF_id].copy(), rdata.oMf[RF_id].copy())]
+print("Create stages")
+stages_full = [createStage(contact_phases[0], contact_phases[0], rdata.oMf[LF_id].copy(), rdata.oMf[RF_id].copy(), urefs[0])]
 for i in range(1,Tmpc):
-    stages_full.append(createStage(contact_phases[i],contact_phases[i-1], rdata.oMf[LF_id].copy(), rdata.oMf[RF_id].copy()))
+    stages_full.append(createStage(contact_phases[i],contact_phases[i-1], rdata.oMf[LF_id].copy(), rdata.oMf[RF_id].copy(), urefs[i]))
 
-stages = [createStage(contact_phases[0], contact_phases[0], rdata.oMf[LF_id].copy(), rdata.oMf[RF_id].copy())] * nsteps
+stages = [createStage(contact_phases[0], contact_phases[0], rdata.oMf[LF_id].copy(), rdata.oMf[RF_id].copy(), u0)] * nsteps
 problem = aligator.TrajOptProblem(x0, stages, term_cost)
 
 TOL = 1e-5
 mu_init = 1e-8 
-
 rho_init = 0.0
 max_iters = 100
 verbose = aligator.VerboseLevel.VERBOSE
-solver = aligator.SolverProxDDP(TOL, mu_init, rho_init, verbose=verbose)
+solver = aligator.SolverProxDDP(TOL, mu_init, rho_init) #, verbose=verbose)
 #solver = aligator.SolverFDDP(TOL, verbose=verbose)
 solver.rollout_type = aligator.ROLLOUT_LINEAR
 #print("LDLT algo choice:", solver.ldlt_algo_choice)
-solver.linear_solver_choice = aligator.LQ_SOLVER_PARALLEL #LQ_SOLVER_SERIAL
+#solver.linear_solver_choice = aligator.LQ_SOLVER_PARALLEL #LQ_SOLVER_SERIAL
 solver.force_initial_condition = True
-solver.setNumThreads(8)
+solver.sa_strategy = aligator.SA_FILTER
+solver.filter.beta = 1e-5
+#solver.setNumThreads(8)
 solver.max_iters = max_iters
 
 solver.setup(problem)
@@ -281,7 +323,7 @@ L_measured = []
 device.showTargetToTrack(rdata.oMf[LF_id], rdata.oMf[RF_id])
 solve_time = []
 time_computation = 0
-weights_ID = [100, 100] # Acceleration, forces
+weights_ID = [100, 100000] # Acceleration, forces
 ID_solver = IDSolver(rmodel, weights_ID, nk, mu, Lfoot, Wfoot, sole_ids, force_size, False)
 
 lowlevel_time = 0
@@ -362,8 +404,9 @@ for t in range(Tmpc):
             device.moveMarkers(LF_refs[s].translation, RF_refs[s].translation)
         exit() """
 
-    #a0 = solver.workspace.problem_data.stage_data[0].constraint_data[0].continuous_data.xdot[rmodel.nv:]
-    a0 = solver.workspace.problem_data.stage_data[0].dynamics_data.continuous_data.xdot[rmodel.nv:]
+    a0 = solver.workspace.problem_data.stage_data[0].constraint_data[0].continuous_data.xdot[rmodel.nv:]
+    #a0 = solver.workspace.problem_data.stage_data[0].dynamics_data.continuous_data.xdot[rmodel.nv:]
+    
 
     #while lowlevel_time < time_computation:
     for j in range(Nsimu):
@@ -388,8 +431,8 @@ for t in range(Tmpc):
         pin.computeJointJacobiansTimeVariation(rmodel, rdata, x_measured[:nq], x_measured[nq:])
         pin.dccrba(rmodel,rdata, x_measured[:nq], x_measured[nq:])
 
-        a0[6:] = us[0][nk * force_size:] #+ K0[nk * force_size:] @ state_diff
-        forces = us[0][:nk * force_size] #+ K0[:nk * force_size] @ state_diff
+        a0[6:] = us[0][nk * force_size:] #- K0[nk * force_size:] @ state_diff
+        forces = us[0][:nk * force_size] #- K0[:nk * force_size] @ state_diff
 
         new_acc, new_forces, torque_qp =ID_solver.solve(
             rdata,
