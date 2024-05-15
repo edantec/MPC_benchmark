@@ -72,9 +72,9 @@ w_x = np.array([
     0, 0, 1000, 1000, 1000, 1000, # Base pos/ori
     0.1, 0.1, 0.1, 0.1, 0.1, 0.1, # Left leg
     0.1, 0.1, 0.1, 0.1, 0.1, 0.1, # Right leg
-    100, 1000, # Torso
-    10, 10, 10, 10, # Left arm
-    10, 10, 10, 10, # Right arm
+    1, 1000, # Torso
+    1, 1, 10, 10, # Left arm
+    1, 1, 10, 10, # Right arm
     0.1, 0.1, 0.1, 1000, 1000, 1000, # Base pos/ori vel
     1, 1, 1, 1, 1, 1, # Left leg vel
     1, 1, 1, 1, 1, 1, # Right leg vel
@@ -83,21 +83,21 @@ w_x = np.array([
     10, 10, 10, 10, # Right arm vel
 ]) 
 w_x = np.diag(w_x) * 10
-w_linforce = np.ones(3) * 0.001
-w_angforce = np.ones(3) * 1
+w_linforce = np.array([0.001,0.001,0.01])
+w_angforce = np.ones(3) * 0.1
 w_u = np.concatenate((
     w_linforce, 
     w_angforce,
     w_linforce, 
     w_angforce,
-    np.ones(rmodel.nv - 6) * 1e-3
+    np.ones(rmodel.nv - 6) * 1e-4
 ))
 w_u = np.diag(w_u) 
-w_LFRF = 500000
-w_cent_lin = np.array([0.,0.,0.])
-w_cent_ang = np.array([0.1,0.1,0.1])
+w_LFRF = 50000
+w_cent_lin = np.array([0.01,0.01,0.01])
+w_cent_ang = np.array([0.1,0.1,10])
 w_cent = np.diag(np.concatenate((w_cent_lin,w_cent_ang)))
-w_centder_lin = np.ones(3) * 0.1
+w_centder_lin = np.ones(3) * 0.
 w_centder_ang = np.ones(3) * 0.1
 w_centder = np.diag(np.concatenate((w_centder_lin,w_centder_ang)))
 w_com = np.diag(np.array([0]))
@@ -168,11 +168,11 @@ def createStage(contact_state, contact_state_previous, LF_pose, RF_pose, uforce)
         stm.addConstraint(frame_vel_LF, constraints.EqualityConstraintSet())
     if contact_state[1]:
         stm.addConstraint(frame_vel_RF, constraints.EqualityConstraintSet()) 
-    """
+    
     if contact_state[1] and not(contact_state_previous[1]):
         stm.addConstraint(frame_cs_RF, constraints.EqualityConstraintSet())
     if contact_state[0] and not(contact_state_previous[0]):
-        stm.addConstraint(frame_cs_LF, constraints.EqualityConstraintSet()) """
+        stm.addConstraint(frame_cs_LF, constraints.EqualityConstraintSet()) 
     return stm
 
 term_cost = aligator.CostStack(space, nu)
@@ -188,9 +188,9 @@ centder_mom_ter = aligator.CentroidalMomentumDerivativeResidual(
 #term_cost.addCost(aligator.QuadraticStateCost(space, nu, x0, 100 * w_x))
 
 """ Define gait and time parameters"""
-T_ds = 10
-T_ss = 40
-dt = 0.02
+T_ds = 20
+T_ss = 80
+dt = 0.01
 nsteps = 100
 Nsimu = int(dt / 0.001) 
 
@@ -203,7 +203,7 @@ for s in range(total_steps):
                       [[False,True]] * T_ss + \
                       [[True,True]] * T_ds
 
-contact_phases += [[True,True]] * nsteps * 2
+contact_phases += [[True,True]] * nsteps
 
 f_full = -mass * gravity[2]
 f_half = -mass * gravity[2] / 2.
@@ -238,7 +238,7 @@ for j in range(T_ds):
     un[8] = f_full * (T_ds - j) / float(T_ds) + f_half * j / float(T_ds)
     urefs.append(un)
 
-for j in range(nsteps * 2):
+for j in range(nsteps):
     un = np.zeros(nu)
     un[2] = f_half 
     un[8] = f_half 
@@ -266,7 +266,7 @@ x_forward = 0.3
 y_forward = 0.
 foot_yaw = 0
 y_gap = 0.18
-x_depth = 0.005
+x_depth = 0.00
 
 foottraj = footTrajectory(
     rdata.oMf[LF_id].copy(), rdata.oMf[RF_id].copy(), T_ss, T_ds, nsteps, swing_apex, x_forward, y_forward, foot_yaw, y_gap, x_depth
@@ -352,7 +352,7 @@ time_computation = 0.01
 new_forces = np.zeros(12)
 
 fd = 300
-theta = 0 * np.pi / 4
+theta = 7 * np.pi / 4
 f_disturbance = [np.cos(theta)* fd, np.sin(theta) * fd, 0]
 
 x_measured_prev = xs[0].copy()
@@ -470,10 +470,10 @@ for t in range(Tmpc):
         #print("QP solve " + str(end2 - start2))
 
         device.execute(torque_qp)
-        """ if t >= 125 and t < 131:
+        """ if t >= 160 and t < 171:
         #if t >= 160 and t < 171:
             print("Force applied")
-            device.apply_force(f_disturbance, [0, 0, 0]) """
+            device.apply_force(f_disturbance, [0, 0, 0])  """
 
         u_multibody.append(torque_qp)
         x_multibody.append(x_measured)
@@ -530,4 +530,4 @@ com_measured = np.array(com_measured)
 L_measured = np.array(L_measured)
 
 save_trajectory(x_multibody, u_multibody, com_measured, force_left, force_right, torque_left, torque_right, solve_time, 
-                LF_measured, RF_measured, LF_references, RF_references, L_measured, "kinodynamics_f62")
+                LF_measured, RF_measured, LF_references, RF_references, L_measured, "kinodynamics")

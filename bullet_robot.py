@@ -85,6 +85,7 @@ class BulletRobot:
         p.changeDynamics(self.robotId, 7, lateralFriction=100, spinningFriction=30)
         p.changeDynamics(self.robotId, 11, lateralFriction=100, spinningFriction=30)
         p.changeDynamics(self.robotId, 15, lateralFriction=100, spinningFriction=30)
+        p.configureDebugVisualizer(p.COV_ENABLE_SHADOWS,0)
 
     def initializeJoints(self, q0CompleteStart):
         # Initialize position in pyBullet

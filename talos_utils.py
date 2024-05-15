@@ -186,6 +186,10 @@ class footTrajectory:
         self.nsteps = nsteps
         self.swing_apex = swing_apex
     
+    def updateForward(self, x_f, y_gap, y_forward, x_depth):
+        self.translationRight = np.array([x_f, -y_gap - y_forward, -x_depth])
+        self.translationLeft = np.array([x_f, y_gap, -x_depth])
+    
     def updateTrajectory(self, takeoff_RF, takeoff_LF, land_RF, land_LF, LF_pose, RF_pose):
         if land_LF < 0:
             self.start_pose_left = LF_pose.copy()
@@ -590,7 +594,7 @@ class IDSolver:
     def __init__(
         self, model, weights, nk, mu, L, W, contact_ids, force_size, verbose: bool
     ):
-        kd = 2 * np.sqrt(100)
+        kd = 2 * np.sqrt(0)
         baum_Kd = np.array([kd,kd,kd])
         self.baum_Kd = np.diag(baum_Kd)
         self.nk = nk

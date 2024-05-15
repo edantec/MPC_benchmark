@@ -81,18 +81,19 @@ device = BulletRobot(controlled_joints,
                         rmodelComplete,
                         q0[:3])
 device.initializeJoints(qComplete)
+device.changeCamera(1., 0, -30, [1.5, -1, 1.2])
 q_current, v_current = device.measureState()
 
 """ Define gait and time parameters"""
-T_ds = 20  # Double support time
-T_ss = 80  # Singel support time
+T_ds = 20 # Double support time
+T_ss = 80 # Singel support time
 
 dt = 0.01
 nsteps = 100
 Nsimu = int(dt / 0.001)
 
 """ Define contact sequence throughout horizon"""
-total_steps = 5
+total_steps = 2
 contact_phases = [[True,True]] * T_ds
 for s in range(total_steps):
     contact_phases += [[True,False]] * T_ss + \
@@ -100,7 +101,7 @@ for s in range(total_steps):
                       [[False,True]] * T_ss + \
                       [[True,True]] * T_ds 
     
-contact_phases += [[True,True]] * nsteps 
+contact_phases += [[True,True]] * nsteps
 
 takeoff_RFs = []
 takeoff_LFs = []
@@ -116,12 +117,51 @@ for i in range(1, len(contact_phases)):
     elif contact_phases[i] == [True, True] and contact_phases[i - 1] == [False, True]:
         land_LFs.append(i + nsteps)
 
+f_full = -mass * gravity[2]
+f_half = -mass * gravity[2] / 2.
+urefs = []
+for i in range(total_steps):
+    for j in range(T_ds):
+        un = np.zeros(nu)
+        if i == 0:
+            un[2] = f_full * j / T_ds + f_half * (T_ds - j) / T_ds
+            un[8] = f_half * (T_ds - j) / T_ds 
+        else:
+            un[2] = f_full * (j + 1) / T_ds
+            un[8] = f_full * (T_ds - j) / T_ds 
+        urefs.append(un)
+    for j in range(T_ss):
+        un = np.zeros(nu)
+        un[2] = f_full
+        urefs.append(un)
+    for j in range(T_ds):
+        un = np.zeros(nu)
+        un[2] = f_full * (T_ds - j) / T_ds
+        un[8] = f_full * (j + 1) / T_ds 
+        urefs.append(un)
+    for j in range(T_ss):
+        un = np.zeros(nu)
+        un[8] = f_full
+        urefs.append(un)
+
+for j in range(T_ds):
+    un = np.zeros(nu)
+    un[2] = f_half * (j + 1) / float(T_ds)
+    un[8] = f_full * (T_ds - j) / float(T_ds) + f_half * j / float(T_ds)
+    urefs.append(un)
+
+for j in range(nsteps):
+    un = np.zeros(nu)
+    un[2] = f_half 
+    un[8] = f_half 
+    urefs.append(un)
+
 T_mpc = len(contact_phases)  # Size of the problem
 
 """ Define feet trajectory """
 swing_apex = 0.15
-x_forward = 0.2
-y_forward = 0.
+x_forward = 0.3
+y_forward = 0.0
 foot_yaw = 0
 y_gap = 0.18
 x_depth = 0
@@ -132,13 +172,13 @@ foottraj = footTrajectory(
 
 """ Create dynamics and costs """
 
-w_angular_acc = 10 * np.eye(3)
-w_linear_mom = np.diag(np.array([0.01,0.01,100]))
 w_centroidal_com = np.diag(np.array([0,0,0]))
-w_linear_acc = 0.1 * np.eye(3)
-w_angular_mom = np.diag(np.array([10,10,100]))
+w_linear_mom = np.diag(np.array([0.01,0.01,100]))
+w_linear_acc = 0.01 * np.eye(3)
+w_angular_mom = np.diag(np.array([0.1,0.1,1000]))
+w_angular_acc = 0.01 * np.eye(3)
 
-w_control_linear = np.ones(3) * 0.0001
+w_control_linear = np.ones(3) * 0.001
 w_control_angular = np.ones(3) * 0.1
 w_control = np.diag(np.concatenate((
     w_control_linear,
@@ -153,7 +193,7 @@ def create_dynamics(contact_map):
     return dyn_model
 
 
-def createStage(contact_state, LF_pose, RF_pose):
+def createStage(contact_state, LF_pose, RF_pose, ur):
     contact_pose = [LF_pose.translation, RF_pose.translation]
     contact_map = aligator.ContactMap(contact_state, contact_pose)
 
@@ -168,9 +208,8 @@ def createStage(contact_state, LF_pose, RF_pose):
     linear_mom = aligator.LinearMomentumResidual(nx, nu, np.zeros(3))
     angular_mom = aligator.AngularMomentumResidual(nx, nu, np.zeros(3))
     centroidal_com = aligator.CentroidalCoMResidual(nx, nu, com0)
-    
-    u00 = np.zeros(nu)
-    rcost.addCost(aligator.QuadraticControlCost(space, u00, w_control))
+
+    rcost.addCost(aligator.QuadraticControlCost(space, ur, w_control))
     rcost.addCost(
         aligator.QuadraticResidualCost(space, centroidal_com, w_centroidal_com)
     )
@@ -195,14 +234,17 @@ def createStage(contact_state, LF_pose, RF_pose):
     return stm
 
 term_cost = aligator.CostStack(space, nu)
+centroidal_com_ter = aligator.CentroidalCoMResidual(nx, nu, com0)
+w_ter = np.eye(3) * 1000
+#term_cost.addCost(aligator.QuadraticResidualCost(space, centroidal_com_ter, w_ter))
 
 """ Create the optimal problem and the full horizon """
 
 stages = []
 for i in range(nsteps):
-    stages.append(createStage(contact_phases[0], rdata.oMf[LF_id].copy(), rdata.oMf[RF_id].copy()))
+    stages.append(createStage(contact_phases[0], rdata.oMf[LF_id].copy(), rdata.oMf[RF_id].copy(), urefs[0]))
 
-stages_full = [createStage(contact_phases[i], rdata.oMf[LF_id].copy(), rdata.oMf[RF_id].copy()) for i in range(T_mpc)]
+stages_full = [createStage(contact_phases[i], rdata.oMf[LF_id].copy(), rdata.oMf[RF_id].copy(), urefs[i]) for i in range(T_mpc)]
 
 problem = aligator.TrajOptProblem(x0, stages, term_cost)
 
@@ -242,7 +284,7 @@ xs = results.xs.tolist().copy()
 us = results.us.tolist().copy()
 K0 = results.controlFeedbacks()[0]
 
-solver.max_iters = 1
+solver.max_iters = 5
 
 x_measured = shapeState(
     q_current, 
@@ -265,20 +307,21 @@ u_multibody = []
 com_measured = []
 solve_time = []
 L_measured = []
+QP_time = []
 
-g_p = 200
+g_p = 400
 g_h = 10
 g_b = 10
 K_gains = []
 g_q = np.diag(np.array([
-    0, 0, 0, 0, 0, 0,
+    0, 0, 0, 10, 10, 10,
     0.1, 0.1, 0.1, 0.1, 0.1, 0.1,
     0.1, 0.1, 0.1, 0.1, 0.1, 0.1,
     1, 1,
     10, 10, 10, 10,
     10, 10, 10, 10
 ]))
-K_gains.append([g_q, 2 * np.sqrt(g_q)])
+K_gains.append([g_q * 10, 2 * np.sqrt(g_q * 10)])
 K_gains.append([np.eye(6) * g_p, np.eye(6) * 2 * np.sqrt(g_p)])
 K_gains.append([np.eye(6) * g_h, np.eye(6) * 2 * np.sqrt(g_h)])
 K_gains.append([np.eye(3) * g_b, np.eye(3) * 2 * np.sqrt(g_b)])
@@ -300,6 +343,11 @@ time_computation = 0.01
 
 """ Launch the MPC loop"""
 
+fd = 0
+theta = 7 * np.pi / 4
+f_disturbance = [np.cos(theta)* fd, np.sin(theta) * fd, 0]
+
+new_x_prev = x0.copy()
 for t in range(T_mpc):
     print("Time " + str(t))
     
@@ -312,24 +360,26 @@ for t in range(T_mpc):
         str(land_RF) + ", takeoff_LF = " + str(takeoff_LF) + ", landing_LF = ",
         str(land_LF),
     )
+    if land_RF == -1 and takeoff_RF == -1:
+        foottraj.updateForward(0, y_gap, y_forward, x_depth)
 
     LF_refs, RF_refs = foottraj.updateTrajectory(
         takeoff_RF, takeoff_LF, land_RF, land_LF, rdata.oMf[LF_id].copy(), rdata.oMf[RF_id].copy()
     )
     device.moveMarkers(LF_refs[0].translation, RF_refs[0].translation)
     
-    contact_state = problem.stages[0].dyn_model.differential_dynamics.contact_map.contact_states
+    contact_state = problem.stages[0].dynamics.differential_dynamics.contact_map.contact_states
     
     for n in range(nsteps):
-        contact_state = problem.stages[n].dyn_model.differential_dynamics.contact_map.contact_states
+        contact_state = problem.stages[n].dynamics.differential_dynamics.contact_map.contact_states
         if contact_state[0]:
-            problem.stages[n].dyn_model.differential_dynamics.contact_map.contact_poses[0] = LF_refs[n].translation
+            problem.stages[n].dynamics.differential_dynamics.contact_map.contact_poses[0] = LF_refs[n].translation
             problem.stages[n].cost.components[4].residual.contact_map.contact_poses[0] = LF_refs[n].translation
             problem.stages[n].cost.components[5].residual.contact_map.contact_poses[0] = LF_refs[n].translation 
             #problem.stages[n].constraints[1].func.updateWrenchCone(LF_refs[n].rotation)
         
         if contact_state[1]:
-            problem.stages[n].dyn_model.differential_dynamics.contact_map.contact_poses[1] = RF_refs[n].translation
+            problem.stages[n].dynamics.differential_dynamics.contact_map.contact_poses[1] = RF_refs[n].translation
             problem.stages[n].cost.components[4].residual.contact_map.contact_poses[1] = RF_refs[n].translation
             problem.stages[n].cost.components[5].residual.contact_map.contact_poses[1] = RF_refs[n].translation 
             """ if contact_state[0]:
@@ -337,20 +387,20 @@ for t in range(T_mpc):
             else:
                 problem.stages[n].constraints[1].func.updateWrenchCone(RF_refs[n].rotation) """
     
-    contact_state = problem.stages[0].dyn_model.differential_dynamics.contact_map.contact_states
+    contact_state = problem.stages[0].dynamics.differential_dynamics.contact_map.contact_states
     qdot_prev = qdot.copy()
 
     """ if t == 100:
         play_trajectory(x0_multibody, x_measured)
         exit()   """
     
-    if problem.stages[0].dyn_model.differential_dynamics.contact_map.contact_states[0]:
+    if problem.stages[0].dynamics.differential_dynamics.contact_map.contact_states[0]:
         force_left.append(us[0][:3])
         torque_left.append(us[0][3:6])
     else:
         force_left.append(np.zeros(3))
         torque_left.append(np.zeros(3))
-    if problem.stages[0].dyn_model.differential_dynamics.contact_map.contact_states[1]:
+    if problem.stages[0].dynamics.differential_dynamics.contact_map.contact_states[1]:
         force_right.append(us[0][6:9])
         torque_right.append(us[0][9:])
     else:
@@ -371,19 +421,18 @@ for t in range(T_mpc):
     )
     problem.removeTerminalConstraint()
     problem.addTerminalConstraint(term_constraint_com)
+    #problem.term_cost.components[0].residual.setReference(com_final)
 
     """ Compute various references for ID """
     q_diff, dq_diff, LF_diff, dLF_diff, RF_diff, dRF_diff, base_diff, dbase_diff, torso_diff, dtorso_diff = \
       compute_ID_references(space_multibody, rmodel, rdata, LF_id, RF_id, base_id, torso_id, x0_multibody, x_measured, LF_refs, RF_refs, dt)
-    dH = solver.workspace.problem_data.stage_data[0].constraint_data[0].continuous_data.xdot[3:9]
-    
-    """ if t == 650:
-        print("Force applied")
-        device.apply_force([0, -10000,0], [0,-0.1, 0]) """
+    #dH = solver.workspace.problem_data.stage_data[0].constraint_data[0].continuous_data.xdot[3:9]
+    dH = solver.workspace.problem_data.stage_data[0].dynamics_data.continuous_data.xdot[3:9]
 
     #while lowlevel_time < time_computation:
     for j in range(Nsimu):
         lowlevel_time += 0.001
+        time.sleep(0.0005)
         q_current, v_current = device.measureState()
         
         x_measured = shapeState(q_current, 
@@ -392,11 +441,15 @@ for t in range(T_mpc):
                                 nq + nv, 
                                 controlled_ids)
         
-        #x_measured[3:7] = x0_multibody[3:7]
         x_multibody.append(x_measured)
 
-        #state_diff = space_multibody.difference(xs[0], x_measured)
-        start = time.time()
+        new_x = np.zeros(9)
+        new_x[:3] = pin.centerOfMass(rmodel, rdata, x_measured[:nq])
+        pin.computeCentroidalMomentum(rmodel,rdata, x_measured[:nq], x_measured[nq:])
+        new_x[3:6] = rdata.hg.linear
+        new_x[6:] = rdata.hg.angular
+
+        start2 = time.time()
         pin.forwardKinematics(rmodel, rdata, x_measured[:nq])
         pin.updateFramePlacements(rmodel, rdata)
         pin.computeJointJacobians(rmodel,rdata)
@@ -405,6 +458,7 @@ for t in range(T_mpc):
         pin.nonLinearEffects(rmodel, rdata, x_measured[:nq], x_measured[nq:])
         pin.dccrba(rmodel,rdata, x_measured[:nq], x_measured[nq:])
         
+        forces = us[0] - solver.results.controlFeedbacks()[0] @ space.difference(new_x, xs[0])
         new_acc, new_forces, torque = IKID_solver.solve(
             rdata,
             contact_state, 
@@ -414,20 +468,18 @@ for t in range(T_mpc):
             RF_diff, dRF_diff, 
             base_diff, dbase_diff, 
             torso_diff, dtorso_diff, 
-            us[0], dH, M
+            forces, dH, M
         )
 
-        new_x = np.zeros(9)
-        new_x[:3] = pin.centerOfMass(rmodel, rdata, x_measured[:nq])
-        pin.computeCentroidalMomentum(rmodel,rdata, x_measured[:nq], x_measured[nq:])
-        new_x[3:6] = rdata.hg.linear
-        new_x[6:] = rdata.hg.angular
-
-        end = time.time() 
+        end2 = time.time() 
+        QP_time.append(end2 - start2)
         #print(end - start) 
 
         u_multibody.append(torque)
         device.execute(torque)
+        """ if t >= 150 and t < 161:
+            print("Force applied")
+            device.apply_force(f_disturbance, [0, 0, 0])  """
     
     lowlevel_time = 0
     previous_contact_state = copy.deepcopy(contact_state)
@@ -435,9 +487,9 @@ for t in range(T_mpc):
     L_measured.append(rdata.hg.angular.copy())
     xs = xs[1:] + [xs[-1]]
     us = us[1:] + [us[-1]]
-    xs[0] = new_x
+    xs[0] = new_x_prev
 
-    problem.x0_init = new_x
+    problem.x0_init = new_x_prev
     solver.setup(problem)
     start = time.time()
     solver.run(problem, xs, us)
@@ -446,12 +498,18 @@ for t in range(T_mpc):
     time_computation = end - start
     print(end - start)
 
+    new_x_prev = new_x.copy()
+
     xs = solver.results.xs.tolist().copy()
     us = solver.results.us.tolist().copy()
     K0 = solver.results.controlFeedbacks()[0]
 
 print("Elapsed time:")
 print(np.mean(np.array(solve_time)))
+print("QP mean time:")
+print(np.mean(np.array(QP_time)))
+print("QP std time:")
+print(np.std(np.array(QP_time)))
 
 
 force_left = np.array(force_left)
@@ -466,5 +524,5 @@ RF_references = np.array(RF_references)
 com_measured = np.array(com_measured)
 L_measured = np.array(L_measured)
 
-""" save_trajectory(x_multibody, u_multibody, com_measured, force_left, force_right, torque_left, torque_right, solve_time, 
-                LF_measured, RF_measured, LF_references, RF_references, L_measured, "centroidal_f6") """
+save_trajectory(x_multibody, u_multibody, com_measured, force_left, force_right, torque_left, torque_right, solve_time, 
+                LF_measured, RF_measured, LF_references, RF_references, L_measured, "centroidal_f6")
