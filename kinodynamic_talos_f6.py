@@ -11,6 +11,7 @@ from talos_utils import (
     URDF_FILENAME,
     modelPath,
     IDSolver,
+    IDSolver_ulim,
     shapeState,
     footTrajectory,
     update_timings,
@@ -38,6 +39,9 @@ f_ref = np.array([0, 0, -mass * gravity[2] / nk, 0, 0, 0])
 Lfoot = 0.1
 Wfoot = 0.075
 
+u_min = -rmodel.effortLimit[6:]
+u_max = rmodel.effortLimit[6:]
+
 x0 = np.concatenate((q0, np.zeros(nv)))
 u0 = np.zeros(nu)
 for i in range(nk):
@@ -61,8 +65,9 @@ device = BulletRobot(controlled_joints,
                      URDF_FILENAME,
                      1e-3,
                      rmodelComplete)
+device.changeCamera(1., 50, -15, [1.7, -0.5, 1.2])
 device.initializeJoints(qComplete)
-#device.changeCamera(1., 0, -30, [1.5, -1, 1.2])
+#device.changeCamera(1., 90, -5, [1.4, 0, 1])
 q_current, v_current = device.measureState()
 
 sole_ids = [LF_id, RF_id]
@@ -72,9 +77,9 @@ w_x = np.array([
     0, 0, 1000, 1000, 1000, 1000, # Base pos/ori
     0.1, 0.1, 0.1, 0.1, 0.1, 0.1, # Left leg
     0.1, 0.1, 0.1, 0.1, 0.1, 0.1, # Right leg
-    100, 1000, # Torso
-    10, 10, 10, 10, # Left arm
-    10, 10, 10, 10, # Right arm
+    1, 1000, # Torso
+    1, 1, 10, 10, # Left arm
+    1, 1, 10, 10, # Right arm
     0.1, 0.1, 0.1, 1000, 1000, 1000, # Base pos/ori vel
     1, 1, 1, 1, 1, 1, # Left leg vel
     1, 1, 1, 1, 1, 1, # Right leg vel
@@ -83,21 +88,21 @@ w_x = np.array([
     10, 10, 10, 10, # Right arm vel
 ]) 
 w_x = np.diag(w_x) * 10
-w_linforce = np.ones(3) * 0.001
-w_angforce = np.ones(3) * 1
+w_linforce = np.array([0.001,0.001,0.01])
+w_angforce = np.ones(3) * 0.1
 w_u = np.concatenate((
     w_linforce, 
     w_angforce,
     w_linforce, 
     w_angforce,
-    np.ones(rmodel.nv - 6) * 1e-3
+    np.ones(rmodel.nv - 6) * 1e-4
 ))
 w_u = np.diag(w_u) 
-w_LFRF = 500000
-w_cent_lin = np.array([0.,0.,0.])
-w_cent_ang = np.array([0.1,0.1,0.1])
+w_LFRF = 100000
+w_cent_lin = np.array([0.0,0.0,1])
+w_cent_ang = np.array([0.1,0.1,10])
 w_cent = np.diag(np.concatenate((w_cent_lin,w_cent_ang)))
-w_centder_lin = np.ones(3) * 0.1
+w_centder_lin = np.ones(3) * 0.
 w_centder_ang = np.ones(3) * 0.1
 w_centder = np.diag(np.concatenate((w_centder_lin,w_centder_ang)))
 w_com = np.diag(np.array([0]))
@@ -143,9 +148,9 @@ def createStage(contact_state, contact_state_previous, LF_pose, RF_pose, uforce)
     rcost.addCost(aligator.QuadraticControlCost(stage_space, uforce, w_u))
     w_LF = np.zeros((6,6))
     w_RF = np.zeros((6,6))
-    if contact_state[0]: #and not(contact_state[1]):
+    if contact_state[0] and not(contact_state[1]):
         w_RF = w_LFRF * np.eye(6)
-    if contact_state[1]: #and not(contact_state[0]):
+    if contact_state[1] and not(contact_state[0]):
         w_LF = w_LFRF * np.eye(6)
 
     rcost.addCost(aligator.QuadraticResidualCost(stage_space, frame_fn_LF, w_LF))
@@ -157,7 +162,7 @@ def createStage(contact_state, contact_state_previous, LF_pose, RF_pose, uforce)
     stm = aligator.StageModel(rcost, create_dynamics(stage_space, contact_state))
 
     state_fn = aligator.StateErrorResidual(stage_space, nu, stage_space.neutral())[6:nv]
-    stm.addConstraint(state_fn, constraints.BoxConstraint(-rmodel.upperPositionLimit[7:] * 0.8, -rmodel.lowerPositionLimit[7:] * 0.8))
+    stm.addConstraint(state_fn, constraints.BoxConstraint(-rmodel.upperPositionLimit[7:], -rmodel.lowerPositionLimit[7:]))
     
     for i in range(len(contact_state)):
         if contact_state[i]:
@@ -168,17 +173,17 @@ def createStage(contact_state, contact_state_previous, LF_pose, RF_pose, uforce)
         stm.addConstraint(frame_vel_LF, constraints.EqualityConstraintSet())
     if contact_state[1]:
         stm.addConstraint(frame_vel_RF, constraints.EqualityConstraintSet()) 
-    """
-    if contact_state[1] and not(contact_state_previous[1]):
+    
+    """ if contact_state[1] and not(contact_state_previous[1]):
         stm.addConstraint(frame_cs_RF, constraints.EqualityConstraintSet())
     if contact_state[0] and not(contact_state_previous[0]):
-        stm.addConstraint(frame_cs_LF, constraints.EqualityConstraintSet()) """
+        stm.addConstraint(frame_cs_LF, constraints.EqualityConstraintSet())  """
     return stm
 
 term_cost = aligator.CostStack(space, nu)
-cent_mom_ter = aligator.CentroidalMomentumResidual(
+""" cent_mom_ter = aligator.CentroidalMomentumResidual(
     space.ndx, nu, rmodel, np.zeros(6)
-)
+) """
 
 centder_mom_ter = aligator.CentroidalMomentumDerivativeResidual(
     space.ndx, rmodel, gravity, [True,True], sole_ids, force_size
@@ -188,20 +193,23 @@ centder_mom_ter = aligator.CentroidalMomentumDerivativeResidual(
 #term_cost.addCost(aligator.QuadraticStateCost(space, nu, x0, 100 * w_x))
 
 """ Define gait and time parameters"""
-T_ds = 10
-T_ss = 40
-dt = 0.02
+T_ds = 20
+T_ss = 80
+dt = 0.01
 nsteps = 100
-Nsimu = int(dt / 0.001) 
+Nsimu = int(0.01 / 0.001) 
 
 """ Define contact sequence throughout horizon"""
-total_steps = 2
+total_steps = 3
 contact_phases = [[True,True]] * T_ds
 for s in range(total_steps):
     contact_phases += [[True,False]] * T_ss + \
                       [[True,True]] * T_ds + \
                       [[False,True]] * T_ss + \
                       [[True,True]] * T_ds
+
+""" contact_phases += [[True,False]] * T_ss + \
+                  [[True,True]] * T_ds """
 
 contact_phases += [[True,True]] * nsteps * 2
 
@@ -231,6 +239,20 @@ for i in range(total_steps):
         un = np.zeros(nu)
         un[8] = f_full
         urefs.append(un)
+
+""" for j in range(T_ds):
+    un = np.zeros(nu)
+    if i == 0:
+        un[2] = f_full * j / T_ds + f_half * (T_ds - j) / T_ds
+        un[8] = f_half * (T_ds - j) / T_ds 
+    else:
+        un[2] = f_full * (j + 1) / T_ds
+        un[8] = f_full * (T_ds - j) / T_ds 
+    urefs.append(un)
+for j in range(T_ss):
+    un = np.zeros(nu)
+    un[2] = f_full
+    urefs.append(un) """
 
 for j in range(T_ds):
     un = np.zeros(nu)
@@ -266,7 +288,7 @@ x_forward = 0.3
 y_forward = 0.
 foot_yaw = 0
 y_gap = 0.18
-x_depth = 0.005
+x_depth = 0.00
 
 foottraj = footTrajectory(
     rdata.oMf[LF_id].copy(), rdata.oMf[RF_id].copy(), T_ss, T_ds, nsteps, swing_apex, x_forward, y_forward, foot_yaw, y_gap, x_depth
@@ -344,15 +366,15 @@ L_measured = []
 device.showTargetToTrack(rdata.oMf[LF_id], rdata.oMf[RF_id])
 solve_time = []
 time_computation = 0
-weights_ID = [1, 1000] # Acceleration, forces
-ID_solver = IDSolver(rmodel, weights_ID, nk, mu, Lfoot, Wfoot, sole_ids, force_size, False)
+weights_ID = [1, 10000] # Acceleration, forces
+ID_solver = IDSolver_ulim(rmodel, weights_ID, nk, mu, Lfoot, Wfoot, sole_ids, force_size, False)
 
 lowlevel_time = 0
 time_computation = 0.01
 new_forces = np.zeros(12)
 
 fd = 300
-theta = 0 * np.pi / 4
+theta = 6 * np.pi / 4
 f_disturbance = [np.cos(theta)* fd, np.sin(theta) * fd, 0]
 
 x_measured_prev = xs[0].copy()
@@ -363,8 +385,9 @@ for t in range(Tmpc):
         land_LFs, land_RFs, takeoff_LFs, takeoff_RFs
     )
 
-    if land_RF == -1 and takeoff_RF == -1:
-        foottraj.updateForward(0, y_gap, y_forward, x_depth)
+    if land_RF == -1 and takeoff_RF == -1: # land_RF == -1 and takeoff_RF == -1
+        #foottraj.updateForward(0, y_gap, y_forward, x_depth)
+        foottraj.updateForward(0, 0, y_gap, y_forward, 0, 0, swing_apex)
     
     print(
         "takeoff_RF = " + str(takeoff_RF) + ", landing_RF = ",
@@ -468,10 +491,18 @@ for t in range(Tmpc):
         )
         end2 = time.time()
         #print("QP solve " + str(end2 - start2))
+        for z in range(rmodel.nv - 6):
+            torque_qp[z] = max(torque_qp[z], u_min[z])
+            torque_qp[z] = min(torque_qp[z], u_max[z])
+
+        tumax = torque_qp > u_max
+        tumin = torque_qp < u_min
+        if any(tumax) or any(tumin):
+            print("max torque overshoot")
+            exit() 
 
         device.execute(torque_qp)
-        """ if t >= 125 and t < 131:
-        #if t >= 160 and t < 171:
+        """ if t >= 160 and t < 171:
             print("Force applied")
             device.apply_force(f_disturbance, [0, 0, 0]) """
 
@@ -529,5 +560,5 @@ RF_references = np.array(RF_references)
 com_measured = np.array(com_measured)
 L_measured = np.array(L_measured)
 
-save_trajectory(x_multibody, u_multibody, com_measured, force_left, force_right, torque_left, torque_right, solve_time, 
-                LF_measured, RF_measured, LF_references, RF_references, L_measured, "kinodynamics_f62")
+""" save_trajectory(x_multibody, u_multibody, com_measured, force_left, force_right, torque_left, torque_right, solve_time, 
+                LF_measured, RF_measured, LF_references, RF_references, L_measured, "kinodynamics") """

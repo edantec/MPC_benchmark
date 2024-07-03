@@ -272,6 +272,83 @@ class BulletRobot:
             useMaximalCoordinates=True,
         )
     
+    def createStairs(self, pose_stairs, height_step):
+        visualShapeTarget = p.createVisualShape(
+            shapeType=p.GEOM_BOX,
+            halfExtents=[0.2, 0.5, height_step / 2.],
+            rgbaColor=[0.0, 1.0, 1.0, 1.0],
+            specularColor=[0.4, 0.4, 0],
+            visualFramePosition=pose_stairs,
+        )
+
+        collisionShapeTarget = p.createCollisionShape(
+            shapeType=p.GEOM_BOX,
+            halfExtents=[0.2, 0.5, height_step / 2.],
+            collisionFramePosition=pose_stairs,
+        )
+
+        self.stairsID = p.createMultiBody(
+            baseMass=0.0,
+            baseInertialFramePosition=[0, 0, 0],
+            baseCollisionShapeIndex=collisionShapeTarget,
+            baseVisualShapeIndex=visualShapeTarget,
+            basePosition=pose_stairs,
+            useMaximalCoordinates=True,
+        )
+        pose_stairs2 = pose_stairs.copy()
+        pose_stairs2[0] += 0.3
+        pose_stairs2[2] += height_step
+
+        visualShapeTarget2 = p.createVisualShape(
+            shapeType=p.GEOM_BOX,
+            halfExtents=[0.2, 0.5, height_step / 2.],
+            rgbaColor=[1.0, 1.0, 0.0, 1.0],
+            specularColor=[0.4, 0.4, 0],
+            visualFramePosition=pose_stairs2,
+        )
+
+        collisionShapeTarget2 = p.createCollisionShape(
+            shapeType=p.GEOM_BOX,
+            halfExtents=[0.2, 0.5, height_step / 2.],
+            collisionFramePosition=pose_stairs2,
+        )
+
+        self.stairsID2 = p.createMultiBody(
+            baseMass=0.0,
+            baseInertialFramePosition=[0, 0, 0],
+            baseCollisionShapeIndex=collisionShapeTarget2,
+            baseVisualShapeIndex=visualShapeTarget2,
+            basePosition=pose_stairs,
+            useMaximalCoordinates=True,
+        )
+
+        pose_stairs3 = pose_stairs2.copy()
+        pose_stairs3[0] += 0.3
+        pose_stairs3[2] += height_step
+
+        visualShapeTarget3 = p.createVisualShape(
+            shapeType=p.GEOM_BOX,
+            halfExtents=[0.2, 0.5, height_step / 2.],
+            rgbaColor=[0.0, 1.0, 0.0, 1.0],
+            specularColor=[0.4, 0.4, 0],
+            visualFramePosition=pose_stairs3,
+        )
+
+        collisionShapeTarget3 = p.createCollisionShape(
+            shapeType=p.GEOM_BOX,
+            halfExtents=[0.2, 0.5, height_step / 2.],
+            collisionFramePosition=pose_stairs3,
+        )
+
+        self.stairsID3 = p.createMultiBody(
+            baseMass=0.0,
+            baseInertialFramePosition=[0, 0, 0],
+            baseCollisionShapeIndex=collisionShapeTarget3,
+            baseVisualShapeIndex=visualShapeTarget3,
+            basePosition=pose_stairs,
+            useMaximalCoordinates=True,
+        )
+    
     def showSoloFeet(self, FL_pose, FR_pose, HL_pose, HR_pose):
         visualShapeTarget = p.createVisualShape(
             shapeType=p.GEOM_BOX,

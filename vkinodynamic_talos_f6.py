@@ -36,7 +36,7 @@ mu = 0.8  # Friction coefficient
 mass = pin.computeTotalMass(rmodel)
 f_ref = np.array([0, 0, -mass * gravity[2] / nk, 0, 0, 0])
 Lfoot = 0.1
-Wfoot = 0.04
+Wfoot = 0.075
 
 x0 = np.concatenate((q0, np.zeros(6)))
 u0 = np.zeros(nu)
@@ -73,8 +73,8 @@ w_config = np.array([
     10, 10, 10, 10, # Left arm
     10, 10, 10, 10, # Right arm
 ]) 
-w_lin = np.ones(3) * 10
-w_ang = np.ones(3) * 10
+w_lin = np.ones(3) * 1
+w_ang = np.ones(3) * 1
 w_x = np.concatenate((w_config, w_lin, w_ang))
 w_x = np.diag(w_x) 
 w_linforce = np.ones(3) * 1e-5
@@ -84,14 +84,14 @@ w_u = np.concatenate((
     w_angforce,
     w_linforce, 
     w_angforce,
-    np.ones(rmodel.nv - 6) * 10
+    np.ones(rmodel.nv - 6) * 1
 ))
 w_u = np.diag(w_u) 
-w_LFRF = 1000
-w_cent_lin = np.ones(3) * 1e-3
-w_cent_ang = np.ones(3) * 1e-3
+w_LFRF = 10000
+w_cent_lin = np.ones(3) * 1e-2
+w_cent_ang = np.ones(3) * 1e-2
 w_cent = np.diag(np.concatenate((w_cent_lin,w_cent_ang)))
-w_com = np.diag(np.array([1000]))
+w_com = np.diag(np.array([100000]))
 
 def create_dynamics(stage_space, cont_states):
     ode = dynamics.VkinodynamicsFwdDynamics(
@@ -140,7 +140,7 @@ def createStage(contact_state, contact_state_previous, LF_pose, RF_pose):
     
     for i in range(len(contact_state)):
         if contact_state[i]:
-            cone_cstr = aligator.WrenchConeResidual(space.ndx, nu, i, mu, Lfoot, Wfoot)
+            cone_cstr = aligator.WrenchConeResidual(space.ndx, nu, i, mu, Lfoot, Wfoot, np.eye(3))
             stm.addConstraint(cone_cstr, constraints.NegativeOrthant())
 
     """ if contact_state[1] and not(contact_state_previous[1]):
@@ -160,7 +160,7 @@ nsteps = 100
 Nsimu = int(dt / 0.001)
 
 """ Define contact sequence throughout horizon"""
-total_steps = 3
+total_steps = 0
 contact_phases = [[True,True]] * T_ds
 for s in range(total_steps):
     contact_phases += [[True,False]] * T_ss + \
@@ -190,10 +190,12 @@ Tmpc = len(contact_phases)
 swing_apex = 0.15
 x_forward = 0.
 y_gap = 0.18
+y_forward = 0
+foot_yaw = 0
 x_depth = 0.0
 
 foottraj = footTrajectory(
-    rdata.oMf[LF_id].copy(), rdata.oMf[RF_id].copy(), T_ss, T_ds, nsteps, swing_apex, x_forward, y_gap, x_depth
+    rdata.oMf[LF_id].copy(), rdata.oMf[RF_id].copy(), T_ss, T_ds, nsteps, swing_apex, x_forward, y_forward, foot_yaw, y_gap, x_depth
 )
 
 """ Create the optimal problem and the full horizon """
@@ -267,11 +269,11 @@ device.showTargetToTrack(rdata.oMf[LF_id], rdata.oMf[RF_id])
 solve_time = []
 qdot_prev = np.zeros(rmodel.nv)
 
-#weights_ID = [1000, 10000]
-#ID_solver = IDSolver(rmodel, weights_ID, nk, mu, sole_ids, force_size, False)
+weights_ID = [1000, 10000]
+ID_solver = IDSolver(rmodel, weights_ID, nk, mu, Lfoot, Wfoot, sole_ids, force_size, False)
 
-weights_ID = [10000, 100]
-ID_solver = IDSolver_velocity(rmodel, weights_ID, nk, mu, sole_ids, force_size, False)
+#weights_ID = [1000, 1000]
+#ID_solver = IDSolver_velocity(rmodel, weights_ID, nk, mu, sole_ids, force_size, False)
 
 for t in range(Tmpc):
     #print("Time " + str(t))
@@ -363,6 +365,7 @@ for t in range(Tmpc):
             rdata,
             contact_state, 
             x_measured[nq:], 
+            a0,
             forces,
             M
         )

@@ -10,7 +10,7 @@ SMALL_SIZE = 10
 MEDIUM_SIZE = 12
 BIGGER_SIZE = 14
 
-plt.rcParams['figure.dpi'] = 150
+plt.rcParams['figure.dpi'] = 170
 plt.rc('font', size=SMALL_SIZE)          # controls default text sizes
 plt.rc('axes', titlesize=SMALL_SIZE)     # fontsize of the axes title
 plt.rc('axes', labelsize=MEDIUM_SIZE)    # fontsize of the x and y labels
@@ -50,7 +50,7 @@ def computeCoP(LF_pose, RF_pose, LF_force, LF_torque, RF_force, RF_torque):
     
     return cop_total
 
-data_kino = load_data("tmp/kinodynamics.npz") # kinodynamics_f6 fulldynamics centroidal_f6
+data_kino = load_data("tmp/kinodynamics_2stairs.npz") # kinodynamics_f6 fulldynamics centroidal_f6
 xs_kino = data_kino["xs"]
 us_kino = data_kino["us"]
 com_kino = data_kino["com"]
@@ -65,7 +65,7 @@ RF_pose_ref_kino = data_kino["RF_pose_ref"]
 L_measured_kino = data_kino["L_measured"]
 solve_time_kino = data_kino["time"]
 
-data_full = load_data("tmp/fulldynamics.npz") # kinodynamics_f6 fulldynamics centroidal_f6
+data_full = load_data("tmp/fulldynamics_2stairs.npz") # kinodynamics_f6 fulldynamics centroidal_f6
 xs_full = data_full["xs"]
 us_full = data_full["us"]
 com_full = data_full["com"]
@@ -80,7 +80,7 @@ RF_pose_ref_full = data_full["RF_pose_ref"]
 L_measured_full = data_full["L_measured"]
 solve_time_full = data_full["time"]
 
-data = load_data("tmp/centroidal_f6.npz") # kinodynamics_f6 fulldynamics centroidal_f6
+data = load_data("tmp/centroidal_2stairs.npz") # kinodynamics_f6 fulldynamics centroidal_f6
 xs = data["xs"]
 us = data["us"]
 com = data["com"]
@@ -193,6 +193,10 @@ for i in range(Tl_full):
         footxlimup_full.append(max(LF_se3_full.translation[0],RF_se3_full.translation[0]) + FOOT_LENGTH) 
         footxlimdown_full.append(min(LF_se3_full.translation[0],RF_se3_full.translation[0]) - FOOT_LENGTH)
 
+for i in range(1, len(footylimup_full)-1):
+    if footylimup_full[i] != footylimup_full[i - 1] and footylimup_full[i] != footylimup_full[i + 1]:
+        footylimup_full[i] = footylimup_full[i + 1]
+
 for i in range(T_start, Tl_kino + T_start):
     LF_se3_kino = pin.SE3(LF_pose_kino[i])
     RF_se3_kino = pin.SE3(RF_pose_kino[i])
@@ -223,6 +227,8 @@ for i in range(T_start, Tl_kino + T_start):
         footxlimup_kino.append(max(LF_se3_kino.translation[0],RF_se3_kino.translation[0]) + FOOT_LENGTH) 
         footxlimdown_kino.append(min(LF_se3_kino.translation[0],RF_se3_kino.translation[0]) - FOOT_LENGTH)
 
+footylimdown_full[118] = footylimdown_full[117]
+footylimdown_full[200] = footylimdown_full[199]
 cop_total_cent = np.array(cop_total_cent)
 cop_total_kino = np.array(cop_total_kino)
 cop_total_full = np.array(cop_total_full)
@@ -346,34 +352,34 @@ plt.plot(ttl_full, L_measured_full[:,2], label = 'Full dynamics')
 plt.grid(True)
 plt.xlabel("Time (s)")
 plt.ylabel("Angular momentum along z $(kg.m^2.s^{-1})$")
-plt.legend(loc="upper left")
+plt.legend(loc="lower left")
 # Foot force
 
-fig, axs = plt.subplots(ncols=2, nrows=3, figsize=(3.5, 2.5),
+fig, axs = plt.subplots(ncols=1, nrows=3, figsize=(3.5, 2.5),
                         layout="constrained")
-axs[0,0].plot(ttl, LF_force[:,0])
-axs[0,0].plot(ttl_kino, LF_force_kino[T_start:,0])
-axs[0,0].plot(ttl_full, LF_force_full[:,0])
-axs[0,0].set_title('Left foot')
-axs[0,0].set_ylabel('Force along x (N)')
-axs[0,0].grid(True)
-axs[1,0].plot(ttl, LF_force[:,1])
-axs[1,0].plot(ttl_kino, LF_force_kino[T_start:,1])
-axs[1,0].plot(ttl_full, LF_force_full[:,1])
-axs[1,0].set_ylabel('Force along y (N)')
-axs[1,0].grid(True)
+axs[0].plot(ttl, LF_force[:,0])
+axs[0].plot(ttl_kino, LF_force_kino[T_start:,0])
+axs[0].plot(ttl_full, LF_force_full[:,0])
+axs[0].set_title('Left foot')
+axs[0].set_ylabel('X force (N)')
+axs[0].grid(True)
+axs[1].plot(ttl, LF_force[:,1])
+axs[1].plot(ttl_kino, LF_force_kino[T_start:,1])
+axs[1].plot(ttl_full, LF_force_full[:,1])
+axs[1].set_ylabel('Y force (N)')
+axs[1].grid(True)
 #axs[1,0].set_title('Left foot')
-axs[2,0].plot(ttl, LF_force[:,2])
-axs[2,0].plot(ttl_kino, LF_force_kino[T_start:,2])
-axs[2,0].plot(ttl_full, LF_force_full[:,2])
-axs[2,0].set_ylabel('Force along z (N)')
-axs[2,0].set_xlabel('Time (s)')
-axs[2,0].grid(True)
+axs[2].plot(ttl, LF_force[:,2])
+axs[2].plot(ttl_kino, LF_force_kino[T_start:,2])
+axs[2].plot(ttl_full, LF_force_full[:,2])
+axs[2].set_ylabel('Z force (N)')
+axs[2].set_xlabel('Time (s)')
+axs[2].grid(True)
 #axs[2,0].set_title('Fz left')
-axs[0,1].plot(ttl, RF_force[:,0], label = 'Centroidal')
+""" axs[0,1].plot(ttl, RF_force[:,0], label = 'Centroidal')
 axs[0,1].plot(ttl_kino, RF_force_kino[T_start:,0], label = 'Kinodynamics')
 axs[0,1].plot(ttl_full, RF_force_full[:,0], label = 'Full dynamics')
-axs[0,1].legend()
+axs[0,1].legend(loc='upper left')
 axs[0,1].grid(True)
 axs[0,1].set_title('Right foot')
 axs[1,1].plot(ttl, RF_force[:,1])
@@ -386,7 +392,45 @@ axs[2,1].plot(ttl_kino, RF_force_kino[T_start:,2])
 axs[2,1].plot(ttl_full, RF_force_full[:,2])
 axs[2,1].grid(True)
 axs[2,1].set_xlabel('Time (s)')
-#axs[2,1].set_title('Fz right') 
+#axs[2,1].set_title('Fz right')  """
+
+fig, axs = plt.subplots(ncols=2, nrows=3, figsize=(3.5, 2.5),
+                        layout="constrained")
+axs[0,0].plot(ttl, LF_torque[:,0])
+axs[0,0].plot(ttl_kino, LF_torque_kino[T_start:,0])
+axs[0,0].plot(ttl_full, LF_torque_full[:,0])
+axs[0,0].set_title('Left foot')
+axs[0,0].set_ylabel('X torque (N.m)')
+axs[0,0].grid(True)
+axs[1,0].plot(ttl, LF_torque[:,1])
+axs[1,0].plot(ttl_kino, LF_torque_kino[T_start:,1])
+axs[1,0].plot(ttl_full, LF_torque_full[:,1])
+axs[1,0].set_ylabel('Y torque (N.m)')
+axs[1,0].grid(True)
+#axs[1,0].set_title('Left foot')
+axs[2,0].plot(ttl, LF_torque[:,2])
+axs[2,0].plot(ttl_kino, LF_torque_kino[T_start:,2])
+axs[2,0].plot(ttl_full, LF_torque_full[:,2])
+axs[2,0].set_ylabel('Z torque (N.m)')
+axs[2,0].set_xlabel('Time (s)')
+axs[2,0].grid(True)
+#axs[2,0].set_title('Fz left')
+axs[0,1].plot(ttl, RF_torque[:,0], label = 'Centroidal')
+axs[0,1].plot(ttl_kino, RF_torque_kino[T_start:,0], label = 'Kinodynamics')
+axs[0,1].plot(ttl_full, RF_torque_full[:,0], label = 'Full dynamics')
+axs[0,1].legend(loc='upper left')
+axs[0,1].grid(True)
+axs[0,1].set_title('Right foot')
+axs[1,1].plot(ttl, RF_torque[:,1])
+axs[1,1].plot(ttl_kino, RF_torque_kino[T_start:,1])
+axs[1,1].plot(ttl_full, RF_torque_full[:,1])
+axs[1,1].grid(True)
+#axs[1,1].set_title('Fy right')
+axs[2,1].plot(ttl, RF_torque[:,2])
+axs[2,1].plot(ttl_kino, RF_torque_kino[T_start:,2])
+axs[2,1].plot(ttl_full, RF_torque_full[:,2])
+axs[2,1].grid(True)
+axs[2,1].set_xlabel('Time (s)')
 
 # Foot translation
 
@@ -420,22 +464,26 @@ axs[2,1].set_title('RF z') """
 kk=2
 fig, axs = plt.subplots(ncols=1, nrows=3, figsize=(3.5, 2.5),
                         layout="constrained")
-axs[0].plot(ttl_full, RF_trans_full[:,kk])
-axs[0].plot(ttl_full, RF_trans_ref_full[:,kk], 'r')
-axs[0].set_title('LF z full')
-axs[0].set_xlim(0,5.45)
+axs[0].plot(ttl_full, RF_trans_full[:,kk], label = 'Foot position')
+axs[0].plot(ttl_full, RF_trans_ref_full[:,kk], 'r', label = 'Foot reference')
+axs[0].set_title('Full dynamics')
+axs[0].legend(loc='upper left')
+axs[0].set_xlim(1.2,2.)
 axs[0].grid(True)
+axs[0].set_ylabel('Height (m)')
 axs[1].plot(ttl, RF_trans[:,kk])
 axs[1].plot(ttl, RF_trans_ref[:,kk], 'r')
-axs[1].set_xlim(0,5.45)
+axs[1].set_xlim(1.2,2.)
 axs[1].grid(True)
-axs[1].set_title('LF z cent')
+axs[1].set_title('Centroidal')
+axs[1].set_ylabel('Height (m)')
 axs[2].plot(ttl_kino, RF_trans_kino[:,kk])
 axs[2].plot(ttl_kino, RF_trans_ref_kino[:,kk], 'r')
-axs[2].set_xlim(0,5.45)
+axs[2].set_xlim(1.2,2.)
 axs[2].grid(True)
-axs[2].set_title('LF z kino')
-
+axs[2].set_title('Kinodynamics')
+axs[2].set_ylabel('Height (m)')
+axs[2].set_xlabel('Time (s)')
 # Joint power
 nq = 29
 nv = 28
@@ -467,6 +515,9 @@ plt.legend(loc = "upper left")
 print("Mean power for centroidal is " + str(np.mean(power)))
 print("Mean power for kinodynamics is " + str(np.mean(power_kino)))
 print("Mean power for fulldynamics is " + str(np.mean(power_full)))
+print("Dissipated energy for centroidal is " + str(np.sum(power) * 0.001))
+print("Dissipated energy for kinodynamics is " + str(np.sum(power_kino) * 0.001))
+print("Dissipated energy for fulldynamics is " + str(np.sum(power_full) * 0.001))
 plt.show()
 """ BINS = 50
 plt.figure("Computational load for 1 MPC iteration")

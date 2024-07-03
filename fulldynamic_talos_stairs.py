@@ -50,7 +50,9 @@ device = BulletRobot(controlled_joints,
                         1e-3,
                         rmodelComplete)
 device.initializeJoints(qComplete)
-device.changeCamera(1., 50, -15, [1.7, -0.5, 1.2])
+device.createStairs([0.19, -0., 0.02], 0.1)
+#device.changeCamera(1., 30, -10, [1., -0.6, 1.])
+device.changeCamera(1., 0, -10, [0.6, -0.6, 1.])
 #device.changeCamera(1., 90, -5, [1, 0, 1])
 q_current, v_current = device.measureState()
 
@@ -129,10 +131,10 @@ w_x = np.array([
 w_x = np.diag(w_x) * 1
 w_u = np.eye(nu) * 1e-4
 w_LFRF = 2000
-w_com = 0 * np.ones(1)
+w_com = 10 * np.ones(3)
 w_com = np.diag(w_com) 
 
-w_cent_lin = np.array([0.0,0.0,0.])
+w_cent_lin = np.ones(3) * 0
 w_cent_ang = np.array([0.0,0.0,10])
 w_cent = np.diag(np.concatenate((w_cent_lin,w_cent_ang)))
 
@@ -140,7 +142,7 @@ frame_com = aligator.CenterOfMassTranslationResidual(space.ndx, nu, rmodel, com0
 v_ref = pin.Motion()
 v_ref.np[:] = 0.0
 
-w_forces_lin = np.array([0.0001, 0.0001, 0.0001])
+w_forces_lin = np.ones(3) * 0.0001
 w_forces_ang = np.ones(3) * 0.0001
 w_forces = np.diag(np.concatenate((w_forces_lin,w_forces_ang)))
 
@@ -163,7 +165,7 @@ def createStage(cs, cs_previous, LF_target, RF_target, LF_force, RF_force):
         stage_space.ndx, nu, rmodel, RF_target.translation, RF_id)[2]
     frame_cs_LF = aligator.FrameTranslationResidual(
         stage_space.ndx, nu, rmodel, LF_target.translation, LF_id)[2]
-    frame_com = aligator.CenterOfMassTranslationResidual(space.ndx, nu, rmodel, com0)[2]
+    #frame_com = aligator.CenterOfMassTranslationResidual(space.ndx, nu, rmodel, com0)
 
     rcost = aligator.CostStack(stage_space, nu)
     rcost.addCost(aligator.QuadraticStateCost(stage_space, nu, x0, w_x))
@@ -177,7 +179,7 @@ def createStage(cs, cs_previous, LF_target, RF_target, LF_force, RF_force):
     rcost.addCost(aligator.QuadraticResidualCost(stage_space, frame_fn_LF, w_LF))
     rcost.addCost(aligator.QuadraticResidualCost(stage_space, frame_fn_RF, w_RF))
     rcost.addCost(aligator.QuadraticResidualCost(stage_space, cent_mom, w_cent))
-    rcost.addCost(aligator.QuadraticResidualCost(stage_space, frame_com, w_com))
+    #rcost.addCost(aligator.QuadraticResidualCost(stage_space, frame_com, w_com))
     if cs[0] and cs[1]:
         frame_force_LF = aligator.ContactForceResidual(
             stage_space.ndx, rmodel, act_matrix, constraint_models, prox_settings, LF_force, 0)
@@ -198,9 +200,9 @@ def createStage(cs, cs_previous, LF_target, RF_target, LF_force, RF_force):
     stm = aligator.StageModel(rcost, create_dynamics(stage_space, cs))
     
     ctrl_fn = aligator.ControlErrorResidual(stage_space.ndx, np.zeros(nu))
-    stm.addConstraint(ctrl_fn, constraints.BoxConstraint(umin, umax))
+    #stm.addConstraint(ctrl_fn, constraints.BoxConstraint(umin, umax))
     state_fn = aligator.StateErrorResidual(stage_space, nu, stage_space.neutral())[6:nv]
-    stm.addConstraint(state_fn, constraints.BoxConstraint(-rmodel.upperPositionLimit[7:], -rmodel.lowerPositionLimit[7:]))
+    #stm.addConstraint(state_fn, constraints.BoxConstraint(-rmodel.upperPositionLimit[7:], -rmodel.lowerPositionLimit[7:]))
     
     if cs[0] and not(cs[1]):
         frame_cone_LF_const = aligator.MultibodyWrenchConeResidual(
@@ -222,7 +224,7 @@ def createStage(cs, cs_previous, LF_target, RF_target, LF_force, RF_force):
         stm.addConstraint(frame_vel_RF, constraints.EqualityConstraintSet())
     if cs[0] and not(cs_previous[0]):
         stm.addConstraint(frame_cs_LF, constraints.EqualityConstraintSet()) 
-        stm.addConstraint(frame_vel_LF, constraints.EqualityConstraintSet())  """
+        stm.addConstraint(frame_vel_LF, constraints.EqualityConstraintSet()) """
     return stm
 
 term_cost = aligator.CostStack(space, nu)
@@ -243,9 +245,6 @@ for s in range(total_steps):
                       [[True,True]] * T_ds + \
                       [[False,True]] * T_ss + \
                       [[True,True]] * T_ds 
-
-contact_phases += [[True,False]] * T_ss + \
-                  [[True,True]] * T_ds
 
 contact_phases += [[True,True]] * nsteps * 2
 
@@ -304,22 +303,8 @@ for i in range(total_steps):
 for j in range(T_ds):
     LF_force_ref = np.zeros(6)
     RF_force_ref = np.zeros(6)
-    LF_force_ref[2] = f_full * (j + 1) / T_ds
-    RF_force_ref[2] = f_full * (T_ds - j) / T_ds 
-    LF_force_refs.append(LF_force_ref)
-    RF_force_refs.append(RF_force_ref)
-for j in range(T_ss):
-    LF_force_ref = np.zeros(6)
-    RF_force_ref = np.zeros(6)
-    LF_force_ref[2] = f_full
-    LF_force_refs.append(LF_force_ref)
-    RF_force_refs.append(RF_force_ref)
-
-for j in range(T_ds):
-    LF_force_ref = np.zeros(6)
-    RF_force_ref = np.zeros(6)
-    RF_force_ref[2] = f_half * (j + 1) / float(T_ds)
-    LF_force_ref[2] = f_full * (T_ds - j) / float(T_ds) + f_half * j / float(T_ds)
+    LF_force_ref[2] = f_half * (j + 1) / float(T_ds)
+    RF_force_ref[2] = f_full * (T_ds - j) / float(T_ds) + f_half * j / float(T_ds)
     LF_force_refs.append(LF_force_ref)
     RF_force_refs.append(RF_force_ref)
 
@@ -332,15 +317,15 @@ for j in range(nsteps * 2):
     RF_force_refs.append(RF_force_ref)
 
 """ Define feet trajectory """
-swing_apex = 0.15
+swing_apex = 0.5
 x_forward = 0.3
 y_forward = 0.
 foot_yaw = 0
 y_gap = 0.18
-x_depth = 0.0
+z_height = 0.09
 
 foottraj = footTrajectory(
-    rdata.oMf[LF_id].copy(), rdata.oMf[RF_id].copy(), T_ss, T_ds, nsteps, swing_apex, x_forward, y_forward, foot_yaw, y_gap, x_depth
+    rdata.oMf[LF_id].copy(), rdata.oMf[RF_id].copy(), T_ss, T_ds, nsteps, swing_apex, x_forward, y_forward, foot_yaw, y_gap, z_height
 )
 
 stages_full = [createStage(
@@ -412,9 +397,7 @@ device.showTargetToTrack(LF_placement, RF_placement)
 lowlevel_time = 0
 time_computation = 0.01
 
-fd = 300
-theta = 6 * np.pi / 4
-f_disturbance = [np.cos(theta)* fd, np.sin(theta) * fd, 0]
+foottraj.updateForward(0, x_forward, y_gap, y_forward, 0, z_height, swing_apex)
 
 x_measured_prev = xs[0].copy()
 for t in range(Tmpc):
@@ -427,8 +410,8 @@ for t in range(Tmpc):
         land_LFs, land_RFs, takeoff_LFs, takeoff_RFs
     )
 
-    if land_LF == -1: #land_RF == -1 and takeoff_RF == -1:
-        foottraj.updateForward(0, y_gap, y_forward, x_depth)
+    if land_RF == -1 and takeoff_RF == -1: #land_RF == -1 and takeoff_RF == -1:
+        foottraj.updateForward(0, 0, y_gap, y_forward, -0.01, 0, swing_apex)
 
     print(
         "takeoff_RF = " + str(takeoff_RF) + ", landing_RF = ",
@@ -474,7 +457,7 @@ for t in range(Tmpc):
     pin.computeCentroidalMomentum(rmodel,rdata, x_measured[:nq], x_measured[nq:])
     L_measured.append(rdata.hg.angular.copy())
 
-    """ if t == 300:
+    """ if t == 180:
         for s in range(nsteps):
             device.resetState(xs[s][:rmodel.nq])
             time.sleep(0.1)
@@ -490,6 +473,7 @@ for t in range(Tmpc):
     com_final = com0.copy()
     com_final[:2] = (LF_refs[-1].translation[:2] + RF_refs[-1].translation[:2]) / 2
     com_cstr = aligator.CentroidalCoMResidual(space.ndx, nu, com_final)
+    com_final[2] = (LF_refs[-1].translation[2] + RF_refs[-1].translation[2]) / 2 + 0.87
     term_constraint_com = aligator.StageConstraint(
         com_cstr, constraints.EqualityConstraintSet()
     )
@@ -514,9 +498,6 @@ for t in range(Tmpc):
             exit() """
         current_torque = us[0] - solver.results.controlFeedbacks()[0] @ space.difference(x_measured, xs[0])
         device.execute(current_torque)
-        """ if t >= 160 and t < 171:
-            print("Force applied")
-            device.apply_force(f_disturbance, [0, 0, 0]) """
 
         u_multibody.append(current_torque)
         x_multibody.append(x_measured)
@@ -558,8 +539,8 @@ RF_references = np.array(RF_references)
 com_measured = np.array(com_measured)
 L_measured = np.array(L_measured)
 
-save_trajectory(x_multibody, u_multibody, com_measured, force_left, force_right, torque_left, torque_right, solve_time, 
-                LF_measured, RF_measured, LF_references, RF_references, L_measured, "fulldynamics")
+""" save_trajectory(x_multibody, u_multibody, com_measured, force_left, force_right, torque_left, torque_right, solve_time, 
+                LF_measured, RF_measured, LF_references, RF_references, L_measured, "fulldynamics_2stairs") """
 
 Tn = force_left.shape[0]
 ttlin = np.linspace(0,Tn * dt, Tn)

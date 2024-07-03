@@ -12,6 +12,23 @@ URDF_FILENAME = "talos_reduced.urdf"
 URDF_SUBPATH = "/talos_data/robots/" + URDF_FILENAME
 modelPath = example_robot_data.getModelPath(URDF_SUBPATH)
 
+def normalize(v, tolerance=0.00001):
+    mag2 = sum(n * n for n in v)
+    if abs(mag2 - 1.0) > tolerance:
+        mag = np.sqrt(mag2)
+        v = tuple(n / mag for n in v)
+    return v
+
+def axisangle_to_q(v, theta):
+    v = normalize(v)
+    x, y, z = v
+    theta /= 2
+    w = np.cos(theta)
+    x = x * np.sin(theta)
+    y = y * np.sin(theta)
+    z = z * np.sin(theta)
+    return np.array([x, y, z, w])
+
 def loadTalos():
     robotComplete = example_robot_data.load("talos")
     qComplete = robotComplete.model.referenceConfigurations["half_sitting"]
@@ -170,10 +187,10 @@ def load_data(npz_file):
 
 class footTrajectory:
     def __init__(
-        self, start_pose_left, start_pose_right, T_ss, T_ds, nsteps, swing_apex, x_forward, y_forward, foot_angle, y_gap, x_depth
+        self, start_pose_left, start_pose_right, T_ss, T_ds, nsteps, swing_apex, x_forward, y_forward, foot_angle, y_gap, z_height
     ):
-        self.translationRight = np.array([x_forward, -y_gap - y_forward, -x_depth])
-        self.translationLeft = np.array([x_forward, y_gap, -x_depth])
+        self.translationRight = np.array([x_forward, -y_gap - y_forward, z_height])
+        self.translationLeft = np.array([x_forward, y_gap, z_height])
         self.rotationDiff = self.yawRotation(foot_angle)
 
         self.start_pose_left = start_pose_left
@@ -186,9 +203,10 @@ class footTrajectory:
         self.nsteps = nsteps
         self.swing_apex = swing_apex
     
-    def updateForward(self, x_f, y_gap, y_forward, x_depth):
-        self.translationRight = np.array([x_f, -y_gap - y_forward, -x_depth])
-        self.translationLeft = np.array([x_f, y_gap, -x_depth])
+    def updateForward(self, x_f_left, x_f_right, y_gap, y_forward, z_height_left, z_height_right, swing_apex):
+        self.translationRight = np.array([x_f_right, -y_gap - y_forward, z_height_right])
+        self.translationLeft = np.array([x_f_left, y_gap, z_height_left])
+        self.swing_apex = swing_apex
     
     def updateTrajectory(self, takeoff_RF, takeoff_LF, land_RF, land_LF, LF_pose, RF_pose):
         if land_LF < 0:
@@ -266,7 +284,7 @@ class footTrajectory:
         for i in range(4):  # init position. init vel,acc and jerk == 0
             wps[:, i] = placement_init.translation
         # compute mid point (average and offset along z)
-        wps[:, 4] = (placement_init.translation + placement_final.translation) / 2.0
+        wps[:, 4] = placement_init.translation * 3/4 + placement_final.translation * 1/4
         wps[2, 4] += height
         for i in range(5, 9):  # final position. final vel,acc and jerk == 0
             wps[:, i] = placement_final.translation
@@ -727,6 +745,150 @@ class IDSolver:
 
         return anew, new_forces, torque 
 
+class IDSolver_ulim:
+    def __init__(
+        self, model, weights, nk, mu, L, W, contact_ids, force_size, verbose: bool
+    ):
+        kd = 1
+        baum_Kd = np.array([kd,kd,kd])
+        self.baum_Kd = np.diag(baum_Kd)
+        self.nk = nk
+        self.contact_ids = contact_ids
+        self.mu = mu
+        self.L = L
+        self.W = W
+        self.force_size = force_size
+
+        n = 2 * model.nv - 6 + force_size * nk 
+        neq = model.nv + force_size * nk
+        nin = 9 * nk
+
+        self.A = np.zeros((model.nv + force_size * nk, 2 * model.nv - 6 + force_size * nk))
+        self.b = np.zeros(model.nv + force_size * nk)
+        self.l = np.zeros(9 * nk)
+        self.C = np.zeros((9 * nk, 2 * model.nv - 6 + force_size * nk))
+
+        self.S = np.zeros((model.nv,model.nv - 6))
+        self.S[6:,:] = np.eye(model.nv - 6)
+        
+        self.Cmin = np.zeros((9, force_size))
+        if force_size == 3:
+            self.Cmin = np.array([
+                [-1, 0, mu],
+                [1, 0, mu],
+                [-1, 0, mu],
+                [1, 0, mu],
+                [0, 0, 1],
+                [0, 0, 1],
+                [0, 0, 1],
+                [0, 0, 1],
+                [0, 0, 1]
+            ])
+        else:
+            self.Cmin = np.array([
+                [-1, 0, mu, 0, 0, 0],
+                [1, 0, mu, 0, 0, 0],
+                [-1, 0, mu, 0, 0, 0],
+                [1, 0, mu, 0, 0, 0],
+                [0, 0, 1, 0, 0, 0],
+                [0, 0, W, -1, 0, 0],
+                [0, 0, W, 1, 0, 0],
+                [0, 0, L, 0,-1, 0],
+                [0, 0, L, 0, 1, 0]
+            ])
+
+        u = np.ones(9 * nk) * 100000
+        
+        self.l_box = -np.ones(n) * 100000
+        self.l_box[model.nv + force_size * nk:] = -model.effortLimit[6:]
+        self.u_box = np.ones(n) * 100000
+        self.u_box[model.nv + force_size * nk:] = model.effortLimit[6:]
+        g = np.zeros(n)
+        H = np.zeros((n,n))
+        H[:model.nv, :model.nv] = np.eye(model.nv) * weights[0]
+        H[model.nv:model.nv + force_size * nk,model.nv:model.nv + force_size * nk] = np.eye(force_size * nk) * weights[1]
+
+        qp = proxsuite.proxqp.dense.QP(
+            n, neq, nin, False, dense_backend=proxsuite.proxqp.dense.DenseBackend.PrimalDualLDLT)
+        qp.settings.eps_abs = 1e-3
+        qp.settings.eps_rel = 0
+        qp.settings.primal_infeasibility_solving = True
+        qp.settings.check_duality_gap = True
+        qp.settings.verbose = verbose
+        qp.settings.max_iter = 10
+        qp.settings.max_iter_in = 10
+        qp.init(H, g, self.A, self.b, self.C, self.l, u)#, self.l_box, self.u_box)
+        self.qp = qp
+
+        self.model = model
+    
+    def computeMatrice(self, data, cs, v, a, forces, M):
+        nle = data.nle
+        Jc = np.zeros((self.nk * self.force_size, self.model.nv))
+        gamma = np.zeros(self.force_size * self.nk)
+        for i in range(self.nk):
+            if cs[i]:
+                fJf = pin.getFrameJacobian(self.model, data, self.contact_ids[i], pin.LOCAL)[:self.force_size]
+                Jdot = pin.getFrameJacobianTimeVariation(self.model, data, self.contact_ids[i], pin.LOCAL)[:self.force_size]
+                Jc[i * self.force_size:(i+1) * self.force_size,:] = fJf
+                gamma[i * self.force_size:(i+1) * self.force_size] = Jdot @ v
+                #gamma[i * self.force_size:i * self.force_size + 3] += self.baum_Kp @ data.oMf[self.contact_ids[i]].rotation.T @ (data.oMf[self.contact_ids[i]].translation - feet_refs[i])
+                gamma[i * self.force_size:i * self.force_size + 3] += self.baum_Kd @ pin.getFrameVelocity(self.model, data, self.contact_ids[i]).linear \
+                  + self.baum_Kd @ pin.getFrameVelocity(self.model, data, self.contact_ids[i]).angular
+
+        JcT = Jc.T
+        self.A[:self.model.nv,:self.model.nv] = M 
+        self.A[:self.model.nv,self.model.nv:self.model.nv + self.nk * self.force_size] = -JcT
+        self.A[:self.model.nv,self.model.nv + self.nk * self.force_size:] = -self.S
+        self.A[self.model.nv:,:self.model.nv] = Jc 
+
+        self.b[:self.model.nv] = -nle - M @ a + JcT @ forces
+        self.b[self.model.nv:] = -gamma - Jc @ a
+        
+        self.l = np.zeros(9 * self.nk)
+        for i in range(self.nk):
+            if cs[i]:
+                self.l[i * 9:(i+1)*9] = np.array([
+                    forces[i * self.force_size] - forces[i * self.force_size + 2] * self.mu,
+                    -forces[i * self.force_size] - forces[i * self.force_size + 2] * self.mu,
+                    forces[i * self.force_size + 1] - forces[i * self.force_size + 2] * self.mu,
+                    -forces[i * self.force_size + 1] - forces[i * self.force_size + 2] * self.mu,
+                    - forces[i * self.force_size + 2],
+                    forces[i * self.force_size + 3] - forces[i * self.force_size + 2] * self.W,
+                    -forces[i * self.force_size + 3] - forces[i * self.force_size + 2] * self.W,
+                    forces[i * self.force_size + 4] - forces[i * self.force_size + 2] * self.L,
+                    -forces[i * self.force_size + 4] - forces[i * self.force_size + 2] * self.L
+                ]) 
+
+        self.C = np.zeros((9 * self.nk, 2 * self.model.nv - 6 + self.force_size * self.nk))
+        for j in range(self.nk):
+            if cs[i]:
+                self.C[j * 9:(j + 1) * 9, self.model.nv + j * self.force_size:self.model.nv + (j + 1) * self.force_size] = self.Cmin
+
+    def solve(self, data, cs, v, a, forces, M):
+        self.computeMatrice(data, cs, v, a, forces, M)
+
+        self.qp.update(
+            A=self.A,
+            b=self.b,
+            C=self.C,
+            l=self.l,
+            #l_box=self.l_box,
+            #u_box=self.u_box,
+            update_preconditioner=False,
+        )
+        
+        self.qp.solve()
+
+        da = self.qp.results.x[:self.model.nv]
+        anew = a + da
+        dforces = self.qp.results.x[self.model.nv:self.model.nv + self.force_size * self.nk]
+        new_forces = forces + dforces
+        torque = self.qp.results.x[self.model.nv + self.force_size * self.nk:]
+
+        return anew, new_forces, torque 
+
+
 class IKIDSolver_f6:
     def __init__(
         self, model, weights, K_gains, nk, mu, L, W, contact_ids, base_id, torso_id, force_size, verbose: bool
@@ -755,6 +917,10 @@ class IKIDSolver_f6:
         self.b = np.zeros(model.nv + force_size * nk) #
         self.l = np.zeros(9 * nk)
         self.C = np.zeros((9 * nk, 2 * model.nv - 6 + force_size * nk))
+        self.l_box = -np.ones(n) * 100000
+        self.l_box[model.nv + force_size * nk:] = -model.effortLimit[6:]
+        self.u_box = np.ones(n) * 100000
+        self.u_box[model.nv + force_size * nk:] = model.effortLimit[6:]
 
         self.S = np.zeros((model.nv,model.nv - 6))
         self.S[6:,:] = np.eye(model.nv - 6)
@@ -791,7 +957,7 @@ class IKIDSolver_f6:
         self.H[model.nv:model.nv + force_size * nk,model.nv:model.nv + force_size * nk] = np.eye(force_size * nk) * weights[4]
 
         qp = proxsuite.proxqp.dense.QP(
-            n, neq, nin, dense_backend=proxsuite.proxqp.dense.DenseBackend.PrimalDualLDLT)
+            n, neq, nin, True, dense_backend=proxsuite.proxqp.dense.DenseBackend.PrimalDualLDLT)
         qp.settings.eps_abs = 1e-3
         qp.settings.eps_rel = 0.0
         qp.settings.primal_infeasibility_solving = True
@@ -799,7 +965,7 @@ class IKIDSolver_f6:
         qp.settings.verbose = verbose
         qp.settings.max_iter = 100
         qp.settings.max_iter_in = 100
-        qp.init(self.H, self.g, self.A, self.b, self.C, self.l, u)
+        qp.init(self.H, self.g, self.A, self.b, self.C, self.l, u, self.l_box, self.u_box)
         self.qp = qp
 
         self.model = model
@@ -893,6 +1059,8 @@ class IKIDSolver_f6:
             b=self.b,
             C=self.C,
             l=self.l,
+            l_box=self.l_box,
+            u_box=self.u_box,
             update_preconditioner=False,
         )
         

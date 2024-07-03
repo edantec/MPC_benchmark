@@ -5,6 +5,8 @@ from bullet_robot import BulletRobot
 import time
 from scipy.spatial.transform import Rotation as R
 
+DEFAULT_SAVE_DIR = "/home/edantec/Documents/git/MPC_benchmark"
+
 import copy
 from talos_utils import (
     loadTalos, 
@@ -16,7 +18,8 @@ from talos_utils import (
     save_trajectory,
     update_timings,
     compute_ID_references,
-    quaternion_multiply
+    quaternion_multiply,
+    axisangle_to_q
 )
 
 from aligator import (manifolds, 
@@ -75,6 +78,10 @@ sole_ids = [LF_id, RF_id]
 base_id = rmodel.getFrameId("base_link")
 torso_id = rmodel.getFrameId("torso_2_link")
 
+
+v_axis = [0, 0, 1]
+quat = axisangle_to_q(v_axis, 2 * np.pi / 2)
+
 """ Initialize simulation """
 device = BulletRobot(controlled_joints,
                         modelPath,
@@ -82,9 +89,10 @@ device = BulletRobot(controlled_joints,
                         1e-3,
                         rmodelComplete,
                         q0[:3])
+device.createStairs([0.19, -0., 0.02], 0.1)
 device.initializeJoints(qComplete)
-#device.changeCamera(1., 50, -15, [1.7, -0.5, 1.2])
-device.changeCamera(1., 90, -5, [1, 0, 1])
+device.changeCamera(1., 30, -10, [1., -0.6, 1.])
+#device.changeCamera(1., 90, -5, [1, 0, 1])
 q_current, v_current = device.measureState()
 
 """ Define gait and time parameters"""
@@ -96,16 +104,13 @@ nsteps = 100
 Nsimu = int(dt / 0.001)
 
 """ Define contact sequence throughout horizon"""
-total_steps = 1
+total_steps = 3
 contact_phases = [[True,True]] * T_ds
 for s in range(total_steps):
     contact_phases += [[True,False]] * T_ss + \
                       [[True,True]] * T_ds + \
                       [[False,True]] * T_ss + \
                       [[True,True]] * T_ds 
-
-contact_phases += [[True,False]] * T_ss + \
-                  [[True,True]] * T_ds
 
 contact_phases += [[True,True]] * nsteps * 2
 
@@ -152,22 +157,8 @@ for i in range(total_steps):
 
 for j in range(T_ds):
     un = np.zeros(nu)
-    if i == 0:
-        un[2] = f_full * j / T_ds + f_half * (T_ds - j) / T_ds
-        un[8] = f_half * (T_ds - j) / T_ds 
-    else:
-        un[2] = f_full * (j + 1) / T_ds
-        un[8] = f_full * (T_ds - j) / T_ds 
-    urefs.append(un)
-for j in range(T_ss):
-    un = np.zeros(nu)
-    un[2] = f_full
-    urefs.append(un)
-
-for j in range(T_ds):
-    un = np.zeros(nu)
-    un[8] = f_half * (j + 1) / float(T_ds)
-    un[2] = f_full * (T_ds - j) / float(T_ds) + f_half * j / float(T_ds)
+    un[2] = f_half * (j + 1) / float(T_ds)
+    un[8] = f_full * (T_ds - j) / float(T_ds) + f_half * j / float(T_ds)
     urefs.append(un)
 
 for j in range(nsteps * 2):
@@ -179,21 +170,21 @@ for j in range(nsteps * 2):
 T_mpc = len(contact_phases)  # Size of the problem
 
 """ Define feet trajectory """
-swing_apex = 0.15
-x_forward = 0.2
+swing_apex = 0.5
+x_forward = 0.3
 y_forward = 0.0
 foot_yaw = 0
 y_gap = 0.18
-x_depth = 0
+z_height = 0.1
 
 foottraj = footTrajectory(
-    rdata.oMf[LF_id].copy(), rdata.oMf[RF_id].copy(), T_ss, T_ds, nsteps, swing_apex, x_forward, y_forward, foot_yaw, y_gap, x_depth
+    rdata.oMf[LF_id].copy(), rdata.oMf[RF_id].copy(), T_ss, T_ds, nsteps, swing_apex, x_forward, y_forward, foot_yaw, y_gap, z_height
 )
 
 """ Create dynamics and costs """
 
 w_centroidal_com = np.diag(np.array([0,0,0]))
-w_linear_mom = np.diag(np.array([0.01,0.01,100]))
+w_linear_mom = np.diag(np.array([0.01,0.01,1]))
 w_linear_acc = 0.01 * np.eye(3)
 w_angular_mom = np.diag(np.array([0.1,0.1,1000]))
 w_angular_acc = 0.01 * np.eye(3)
@@ -346,8 +337,9 @@ K_gains.append([np.eye(6) * g_p, np.eye(6) * 2 * np.sqrt(g_p)])
 K_gains.append([np.eye(6) * g_h, np.eye(6) * 2 * np.sqrt(g_h)])
 K_gains.append([np.eye(3) * g_b, np.eye(3) * 2 * np.sqrt(g_b)])
 
-weights_IKID = [500, 50000, 10, 1000, 100]  # qref, foot_pose, centroidal, base_rot, force
+weights_IKID = [1000, 80000, 10, 2000, 200]  # qref, foot_pose, centroidal, base_rot, force
 IKID_solver = IKIDSolver_f6(rmodel, weights_IKID, K_gains, nk, mu, Lfoot, Wfoot, sole_ids, base_id, torso_id, force_size, False)
+foottraj.updateForward(0, x_forward, y_gap, y_forward, 0, z_height, swing_apex)
 
 qdot_prev = np.zeros(rmodel.nv)
 qdot = np.zeros(rmodel.nv)
@@ -366,7 +358,7 @@ time_computation = 0.01
 fd = 100
 theta = 6 * np.pi / 4
 f_disturbance = [np.cos(theta)* fd, np.sin(theta) * fd, 0]
-
+steps = 0
 new_x_prev = x0.copy()
 for t in range(T_mpc):
     print("Time " + str(t))
@@ -380,8 +372,17 @@ for t in range(T_mpc):
         str(land_RF) + ", takeoff_LF = " + str(takeoff_LF) + ", landing_LF = ",
         str(land_LF),
     )
-    if land_LF == -1: #land_RF == -1 and takeoff_RF == -1
-        foottraj.updateForward(0, y_gap, y_forward, x_depth)
+    if land_RF == -1 and takeoff_RF == -1: #land_RF == -1 and takeoff_RF == -1
+        foottraj.updateForward(0, 0, y_gap, y_forward, 0, 0, swing_apex)
+    
+    if land_LF == 0 or land_RF == 0:
+        steps += 1
+    
+    """ if steps == 2:
+        foottraj.updateForward(0, x_forward, y_gap, y_forward, 0, 0, 0.15)
+    
+    if steps == 4:
+        foottraj.updateForward(0, x_forward + 0.05, y_gap, y_forward, 0, -z_height, 0.4) """
 
     LF_refs, RF_refs = foottraj.updateTrajectory(
         takeoff_RF, takeoff_LF, land_RF, land_LF, rdata.oMf[LF_id].copy(), rdata.oMf[RF_id].copy()
@@ -435,6 +436,7 @@ for t in range(T_mpc):
     problem.replaceStageCircular(stages_full[t])
     com_final = com0.copy()
     com_final[:2] = (LF_refs[-1].translation[:2] + RF_refs[-1].translation[:2]) / 2
+    com_final[2] = (LF_refs[-1].translation[2] + RF_refs[-1].translation[2]) / 2 + 0.87
     com_cstr = aligator.CentroidalCoMResidual(space.ndx, nu, com_final)
     term_constraint_com = aligator.StageConstraint(
         com_cstr, constraints.EqualityConstraintSet()
@@ -548,5 +550,5 @@ RF_references = np.array(RF_references)
 com_measured = np.array(com_measured)
 L_measured = np.array(L_measured)
 
-save_trajectory(x_multibody, u_multibody, com_measured, force_left, force_right, torque_left, torque_right, solve_time, 
-                LF_measured, RF_measured, LF_references, RF_references, L_measured, "centroidal_f6")
+""" save_trajectory(x_multibody, u_multibody, com_measured, force_left, force_right, torque_left, torque_right, solve_time, 
+                LF_measured, RF_measured, LF_references, RF_references, L_measured, "centroidal_2stairs") """
