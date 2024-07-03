@@ -1,3 +1,9 @@
+"""
+This script launches a locomotion MPC scheme which solves repeatedly an 
+optimal control problem based on the centroidal model of the humanoid robot Talos. 
+The contacts forces are modeled as 6D wrenches. 
+"""
+
 import numpy as np
 import aligator
 import pinocchio as pin
