@@ -10,13 +10,15 @@ from talos_utils import (
     loadTalos, 
     URDF_FILENAME,
     modelPath,
-    IKIDSolver_f6,
     shapeState,
     footTrajectory,
     save_trajectory,
     update_timings,
     compute_ID_references,
-    quaternion_multiply
+)
+
+from QP_utils import (
+   IKIDSolver_f6
 )
 
 from aligator import (manifolds, 
@@ -254,12 +256,8 @@ def createStage(contact_state, LF_pose, RF_pose, ur):
     return stm
 
 term_cost = aligator.CostStack(space, nu)
-centroidal_com_ter = aligator.CentroidalCoMResidual(nx, nu, com0)
-w_ter = np.eye(3) * 1000
-#term_cost.addCost(aligator.QuadraticResidualCost(space, centroidal_com_ter, w_ter))
 
 """ Create the optimal problem and the full horizon """
-
 stages = []
 for i in range(nsteps):
     stages.append(createStage(contact_phases[0], rdata.oMf[LF_id].copy(), rdata.oMf[RF_id].copy(), urefs[0]))
@@ -380,8 +378,8 @@ for t in range(T_mpc):
         str(land_RF) + ", takeoff_LF = " + str(takeoff_LF) + ", landing_LF = ",
         str(land_LF),
     )
-    if land_LF == -1: #land_RF == -1 and takeoff_RF == -1
-        foottraj.updateForward(0, y_gap, y_forward, x_depth)
+    if land_LF == -1: 
+        foottraj.updateForward(0, 0, y_gap, y_forward, -0.01, 0, swing_apex)
 
     LF_refs, RF_refs = foottraj.updateTrajectory(
         takeoff_RF, takeoff_LF, land_RF, land_LF, rdata.oMf[LF_id].copy(), rdata.oMf[RF_id].copy()
@@ -396,16 +394,11 @@ for t in range(T_mpc):
             problem.stages[n].dynamics.differential_dynamics.contact_map.contact_poses[0] = LF_refs[n].translation
             problem.stages[n].cost.components[4].residual.contact_map.contact_poses[0] = LF_refs[n].translation
             problem.stages[n].cost.components[5].residual.contact_map.contact_poses[0] = LF_refs[n].translation 
-            #problem.stages[n].constraints[1].func.updateWrenchCone(LF_refs[n].rotation)
         
         if contact_state[1]:
             problem.stages[n].dynamics.differential_dynamics.contact_map.contact_poses[1] = RF_refs[n].translation
             problem.stages[n].cost.components[4].residual.contact_map.contact_poses[1] = RF_refs[n].translation
             problem.stages[n].cost.components[5].residual.contact_map.contact_poses[1] = RF_refs[n].translation 
-            """ if contact_state[0]:
-                problem.stages[n].constraints[2].func.updateWrenchCone(RF_refs[n].rotation)
-            else:
-                problem.stages[n].constraints[1].func.updateWrenchCone(RF_refs[n].rotation) """
     
     contact_state = problem.stages[0].dynamics.differential_dynamics.contact_map.contact_states
     qdot_prev = qdot.copy()
@@ -441,15 +434,12 @@ for t in range(T_mpc):
     )
     problem.removeTerminalConstraint()
     problem.addTerminalConstraint(term_constraint_com)
-    #problem.term_cost.components[0].residual.setReference(com_final)
 
     """ Compute various references for ID """
     q_diff, dq_diff, LF_diff, dLF_diff, RF_diff, dRF_diff, base_diff, dbase_diff, torso_diff, dtorso_diff = \
       compute_ID_references(space_multibody, rmodel, rdata, LF_id, RF_id, base_id, torso_id, x0_multibody, x_measured, LF_refs, RF_refs, dt)
-    #dH = solver.workspace.problem_data.stage_data[0].constraint_data[0].continuous_data.xdot[3:9]
     dH = solver.workspace.problem_data.stage_data[0].dynamics_data.continuous_data.xdot[3:9]
 
-    #while lowlevel_time < time_computation:
     for j in range(Nsimu):
         lowlevel_time += 0.001
         time.sleep(0.0005)
@@ -548,5 +538,5 @@ RF_references = np.array(RF_references)
 com_measured = np.array(com_measured)
 L_measured = np.array(L_measured)
 
-save_trajectory(x_multibody, u_multibody, com_measured, force_left, force_right, torque_left, torque_right, solve_time, 
-                LF_measured, RF_measured, LF_references, RF_references, L_measured, "centroidal_f6")
+""" save_trajectory(x_multibody, u_multibody, com_measured, force_left, force_right, torque_left, torque_right, solve_time, 
+                LF_measured, RF_measured, LF_references, RF_references, L_measured, "centroidal_f6") """

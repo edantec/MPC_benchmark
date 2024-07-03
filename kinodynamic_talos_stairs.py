@@ -2,7 +2,7 @@ print("Start script")
 import numpy as np
 import pinocchio as pin
 import aligator
-print("Import aligator")
+
 from bullet_robot import BulletRobot
 import time
 import copy
@@ -10,12 +10,15 @@ from talos_utils import (
     loadTalos,
     URDF_FILENAME,
     modelPath,
-    IDSolver,
-    IDSolver_ulim,
     shapeState,
     footTrajectory,
     update_timings,
     save_trajectory,
+)
+
+from QP_utils import (
+    IDSolver,
+    IDSolver_ulim,
 )
 
 from aligator import (manifolds, 
@@ -107,7 +110,6 @@ w_cent = np.diag(np.concatenate((w_cent_lin,w_cent_ang)))
 w_centder_lin = np.ones(3) * 0.
 w_centder_ang = np.ones(3) * 0.1
 w_centder = np.diag(np.concatenate((w_centder_lin,w_centder_ang)))
-w_com = np.diag(np.array([0]))
 
 def create_dynamics(stage_space, cont_states):
     ode = dynamics.KinodynamicsFwdDynamics(
@@ -119,7 +121,7 @@ def create_dynamics(stage_space, cont_states):
 v_ref = pin.Motion()
 v_ref.np[:] = 0.0
 
-def createStage(contact_state, contact_state_previous, LF_pose, RF_pose, uforce):
+def createStage(contact_state, LF_pose, RF_pose, uforce):
     stage_rmodel = rmodel.copy()
     stage_space = manifolds.MultibodyPhaseSpace(stage_rmodel)
     
@@ -138,11 +140,6 @@ def createStage(contact_state, contact_state_previous, LF_pose, RF_pose, uforce)
         stage_space.ndx, nu, stage_rmodel, LF_pose, LF_id)
     frame_fn_RF = aligator.FramePlacementResidual(
         stage_space.ndx, nu, stage_rmodel, RF_pose, RF_id)
-    frame_cs_RF = aligator.FrameTranslationResidual(
-        stage_space.ndx, nu, stage_rmodel, RF_pose.translation, RF_id)[2]
-    frame_cs_LF = aligator.FrameTranslationResidual(
-        stage_space.ndx, nu, stage_rmodel, LF_pose.translation, LF_id)[2]
-    frame_com = aligator.CenterOfMassTranslationResidual(space.ndx, nu, rmodel, com0)[2]
     
     rcost = aligator.CostStack(stage_space, nu)
 
@@ -150,36 +147,31 @@ def createStage(contact_state, contact_state_previous, LF_pose, RF_pose, uforce)
     rcost.addCost(aligator.QuadraticControlCost(stage_space, uforce, w_u))
     w_LF = np.zeros((6,6))
     w_RF = np.zeros((6,6))
-    if contact_state[0]:# and not(contact_state[1]):
+    if contact_state[0]:
         w_RF = w_LFRF * np.eye(6)
-    if contact_state[1]: #and not(contact_state[0]):
+    if contact_state[1]:
         w_LF = w_LFRF * np.eye(6)
 
     rcost.addCost(aligator.QuadraticResidualCost(stage_space, frame_fn_LF, w_LF))
     rcost.addCost(aligator.QuadraticResidualCost(stage_space, frame_fn_RF, w_RF))
     rcost.addCost(aligator.QuadraticResidualCost(stage_space, cent_mom, w_cent))
     rcost.addCost(aligator.QuadraticResidualCost(stage_space, centder_mom, w_centder))
-    rcost.addCost(aligator.QuadraticResidualCost(stage_space, frame_com, w_com))
 
     stm = aligator.StageModel(rcost, create_dynamics(stage_space, contact_state))
 
     state_fn = aligator.StateErrorResidual(stage_space, nu, stage_space.neutral())[6:nv]
-    #stm.addConstraint(state_fn, constraints.BoxConstraint(-rmodel.upperPositionLimit[7:], -rmodel.lowerPositionLimit[7:]))
+    stm.addConstraint(state_fn, constraints.BoxConstraint(-rmodel.upperPositionLimit[7:], -rmodel.lowerPositionLimit[7:]))
     
     for i in range(len(contact_state)):
         if contact_state[i]:
-            cone_cstr = aligator.WrenchConeResidual(space.ndx, nu, i, mu, Lfoot, Wfoot) #np.eye(3)
+            cone_cstr = aligator.WrenchConeResidual(space.ndx, nu, i, mu, Lfoot, Wfoot)
             stm.addConstraint(cone_cstr, constraints.NegativeOrthant())
     
     if contact_state[0]:
         stm.addConstraint(frame_vel_LF, constraints.EqualityConstraintSet())
     if contact_state[1]:
         stm.addConstraint(frame_vel_RF, constraints.EqualityConstraintSet()) 
-    
-    """ if contact_state[1] and not(contact_state_previous[1]):
-        stm.addConstraint(frame_cs_RF, constraints.EqualityConstraintSet())
-    if contact_state[0] and not(contact_state_previous[0]):
-        stm.addConstraint(frame_cs_LF, constraints.EqualityConstraintSet()) """
+
     return stm
 
 term_cost = aligator.CostStack(space, nu)
@@ -272,11 +264,11 @@ foottraj = footTrajectory(
 
 """ Create the optimal problem and the full horizon """
 print("Create stages")
-stages_full = [createStage(contact_phases[0], contact_phases[0], rdata.oMf[LF_id].copy(), rdata.oMf[RF_id].copy(), urefs[0])]
+stages_full = [createStage(contact_phases[0], rdata.oMf[LF_id].copy(), rdata.oMf[RF_id].copy(), urefs[0])]
 for i in range(1,Tmpc):
-    stages_full.append(createStage(contact_phases[i],contact_phases[i-1], rdata.oMf[LF_id].copy(), rdata.oMf[RF_id].copy(), urefs[i]))
+    stages_full.append(createStage(contact_phases[i], rdata.oMf[LF_id].copy(), rdata.oMf[RF_id].copy(), urefs[i]))
 
-stages = [createStage(contact_phases[0], contact_phases[0], rdata.oMf[LF_id].copy(), rdata.oMf[RF_id].copy(), urefs[0])] * nsteps
+stages = [createStage(contact_phases[0], rdata.oMf[LF_id].copy(), rdata.oMf[RF_id].copy(), urefs[0])] * nsteps
 problem = aligator.TrajOptProblem(x0, stages, term_cost)
 
 TOL = 1e-5
@@ -357,7 +349,7 @@ for t in range(Tmpc):
         land_LFs, land_RFs, takeoff_LFs, takeoff_RFs
     )
 
-    if land_RF == -1 and takeoff_RF == -1: # land_RF == -1 and takeoff_RF == -1
+    if land_RF == -1 and takeoff_RF == -1: 
         foottraj.updateForward(0, 0, y_gap, y_forward, 0, 0, swing_apex)
     
     print(
@@ -393,17 +385,7 @@ for t in range(Tmpc):
     )
     problem.removeTerminalConstraint()
     problem.addTerminalConstraint(term_constraint_com)
-    
-    """ if t == 180:
-        for s in range(nsteps):
-            device.resetState(xs[s][:rmodel.nq])
-            time.sleep(0.5)
-            print("s = " + str(s))
-            device.moveMarkers(LF_refs[s].translation, RF_refs[s].translation)
-        exit()  """
 
-    
-    #while lowlevel_time < time_computation:
     for j in range(Nsimu):
         #time.sleep(0.001)
         q_current, v_current = device.measureState()
@@ -415,8 +397,7 @@ for t in range(Tmpc):
                                 controlled_ids)  
 
         state_diff = space.difference(x_measured, xs[0])
-        #state_diff = space.difference(x0_prev, x_measured)
-        contact_state = problem.stages[0].dyn_model.differential_dynamics.contact_states
+        contact_state = problem.stages[0].dynamics.differential_dynamics.contact_states
 
         pin.forwardKinematics(rmodel, rdata, x_measured[:nq])
         pin.updateFramePlacements(rmodel, rdata)
@@ -430,8 +411,6 @@ for t in range(Tmpc):
         a0[6:] = us[0][nk * force_size:] - 1 * solver.results.controlFeedbacks()[0][nk * force_size:] @ state_diff
         forces = us[0][:nk * force_size] - 1 * solver.results.controlFeedbacks()[0][:nk * force_size] @ state_diff 
 
-        """ a0[6:] = u_interpol[nk * force_size:] - K_interpol[nk * force_size:] @ state_diff
-        forces = u_interpol[:nk * force_size] - K_interpol[:nk * force_size] @ state_diff """
         start2 = time.time()
 
         new_acc, new_forces, torque_qp =ID_solver.solve(
@@ -443,16 +422,6 @@ for t in range(Tmpc):
             M
         )
         end2 = time.time()
-        #print("QP solve " + str(end2 - start2))
-        """ for z in range(rmodel.nv - 6):
-            torque_qp[z] = max(torque_qp[z], u_min[z])
-            torque_qp[z] = min(torque_qp[z], u_max[z])
-
-        tumax = torque_qp > u_max
-        tumin = torque_qp < u_min
-        if any(tumax) or any(tumin):
-            print("max torque overshoot")
-            exit()  """
 
         device.execute(torque_qp)
 
@@ -477,9 +446,9 @@ for t in range(Tmpc):
 
     xs = xs[1:] + [xs[-1]]
     us = us[1:] + [us[-1]]
-    xs[0] = x_measured #x_measured_prev
+    xs[0] = x_measured_prev
 
-    problem.x0_init = x_measured #x_measured_prev
+    problem.x0_init = x_measured_prev
     solver.setup(problem)
     start = time.time()
     solver.run(problem, xs, us)
@@ -492,7 +461,6 @@ for t in range(Tmpc):
 
     xs = solver.results.xs.tolist().copy()
     us = solver.results.us.tolist().copy()
-    #K_feedback = solver.results.controlFeedbacks()[0]
 
 print("Elapsed time:")
 print(np.mean(np.array(solve_time)))

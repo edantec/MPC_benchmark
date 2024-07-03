@@ -226,7 +226,6 @@ def createStage(cs, cs_previous, LF_target, RF_target, LF_force, RF_force):
     return stm
 
 term_cost = aligator.CostStack(space, nu)
-#term_cost.addCost(aligator.QuadraticStateCost(space, nu, x0, 100 * w_x))
 
 """ Define gait and time parameters"""
 T_ds = 20
@@ -370,7 +369,7 @@ solver.max_iters = max_iters
 solver.setup(problem)
 
 us_init = [np.zeros(nu)] * nsteps
-xs_init = [x0] * (nsteps + 1) #aligator.rollout(dyn_model, x0, us_init).tolist()
+xs_init = [x0] * (nsteps + 1) 
 
 solver.run(
     problem,
@@ -427,8 +426,8 @@ for t in range(Tmpc):
         land_LFs, land_RFs, takeoff_LFs, takeoff_RFs
     )
 
-    if land_LF == -1: #land_RF == -1 and takeoff_RF == -1:
-        foottraj.updateForward(0, y_gap, y_forward, x_depth)
+    if land_LF == -1: 
+        foottraj.updateForward(0, 0, y_gap, y_forward, -0.01, 0, swing_apex)
 
     print(
         "takeoff_RF = " + str(takeoff_RF) + ", landing_RF = ",
@@ -497,7 +496,6 @@ for t in range(Tmpc):
     problem.addTerminalConstraint(term_constraint_com)
 
     for j in range(Nsimu):
-    #while lowlevel_time < time_computation:
         lowlevel_time += 0.001
         q_current, v_current = device.measureState()
         
@@ -507,11 +505,6 @@ for t in range(Tmpc):
                                 nq + nv, 
                                 controlled_ids)  
         
-        """ tumax = us[0] > umax
-        tumin = us[0] < umin
-        if any(tumax) or any(tumin):
-            print("max torque overshoot")
-            exit() """
         current_torque = us[0] - solver.results.controlFeedbacks()[0] @ space.difference(x_measured, xs[0])
         device.execute(current_torque)
         """ if t >= 160 and t < 171:
@@ -527,7 +520,6 @@ for t in range(Tmpc):
     xs[0] = x_measured_prev
 
     problem.x0_init = x_measured_prev
-    """ problem.addTerminalConstraint(term_cstr) """
     solver.setup(problem)
     start = time.time()
     solver.run(problem, xs, us)
@@ -558,20 +550,5 @@ RF_references = np.array(RF_references)
 com_measured = np.array(com_measured)
 L_measured = np.array(L_measured)
 
-save_trajectory(x_multibody, u_multibody, com_measured, force_left, force_right, torque_left, torque_right, solve_time, 
-                LF_measured, RF_measured, LF_references, RF_references, L_measured, "fulldynamics")
-
-Tn = force_left.shape[0]
-ttlin = np.linspace(0,Tn * dt, Tn)
-
-BINS = 50
-plt.figure(1)
-plt.title("Time consumption for FDDP")
-plt.hist(solve_time, bins=BINS)
-plt.xlabel("Time (s)")
-plt.ylabel("Occurences")
-plt.grid(True)
-#plt.savefig("plots/fddp.png")
-
-
-plt.show()
+""" save_trajectory(x_multibody, u_multibody, com_measured, force_left, force_right, torque_left, torque_right, solve_time, 
+                LF_measured, RF_measured, LF_references, RF_references, L_measured, "fulldynamics") """
