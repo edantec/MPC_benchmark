@@ -1,6 +1,6 @@
 """
 This script launches a locomotion MPC scheme which solves repeatedly an 
-optimal control problem based on the kinodynamics model of the humanoid robot Talos. 
+optimal control problem based on the centroidal model of the humanoid robot Talos. 
 The contacts forces are modeled as 4 3D forces for each foot. 
 """
 

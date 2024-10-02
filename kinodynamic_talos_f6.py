@@ -8,7 +8,7 @@ print("Start script")
 import numpy as np
 import pinocchio as pin
 import aligator
-
+import example_robot_data
 from bullet_robot import BulletRobot
 import time
 import copy
@@ -60,24 +60,13 @@ u00 = np.zeros(nu)
 pin.forwardKinematics(rmodel, rdata, q0)
 pin.updateFramePlacements(rmodel, rdata)
 com0 = pin.centerOfMass(rmodel,rdata,q0)
+tau = np.sqrt(com0[2] / 9.81) # Time constant for DCM
 
 LF_id = rmodel.getFrameId("left_sole_link")
 RF_id = rmodel.getFrameId("right_sole_link")
 
 controlled_joints = rmodel.names[1:].tolist()
 controlled_ids = [rmodelComplete.getJointId(name_joint) for name_joint in controlled_joints[1:]]
-
-""" Initialize simulation"""
-print("Initialize simu")
-device = BulletRobot(controlled_joints,
-                     modelPath,
-                     URDF_FILENAME,
-                     1e-3,
-                     rmodelComplete)
-device.changeCamera(1., 50, -15, [1.7, -0.5, 1.2])
-device.initializeJoints(qComplete)
-#device.changeCamera(1., 90, -5, [1.4, 0, 1])
-q_current, v_current = device.measureState()
 
 sole_ids = [LF_id, RF_id]
 
@@ -119,7 +108,7 @@ def create_dynamics(stage_space, cont_states):
     ode = dynamics.KinodynamicsFwdDynamics(
         stage_space, rmodel, gravity, cont_states, sole_ids, force_size
     )
-    dyn_model = dynamics.IntegratorEuler(ode, dt)
+    dyn_model = dynamics.IntegratorSemiImplEuler(ode, dt)
     return dyn_model
 
 v_ref = pin.Motion()
@@ -147,39 +136,48 @@ def createStage(contact_state, LF_pose, RF_pose, uforce):
     
     rcost = aligator.CostStack(stage_space, nu)
 
-    rcost.addCost(aligator.QuadraticStateCost(stage_space, nu, x0, w_x))
-    rcost.addCost(aligator.QuadraticControlCost(stage_space, uforce, w_u))
+    rcost.addCost("state_cost",
+                  aligator.QuadraticStateCost(stage_space, nu, x0, w_x))
+    rcost.addCost("control_cost",
+                  aligator.QuadraticControlCost(stage_space, uforce, w_u))
     w_LF = np.zeros((6,6))
     w_RF = np.zeros((6,6))
-    if contact_state[0] and not(contact_state[1]):
+    if contact_state[0]: # and not(contact_state[1]):
         w_RF = w_LFRF * np.eye(6)
-    if contact_state[1] and not(contact_state[0]):
+    if contact_state[1]: # and not(contact_state[0]):
         w_LF = w_LFRF * np.eye(6)
-
-    rcost.addCost(aligator.QuadraticResidualCost(stage_space, frame_fn_LF, w_LF))
-    rcost.addCost(aligator.QuadraticResidualCost(stage_space, frame_fn_RF, w_RF))
-    rcost.addCost(aligator.QuadraticResidualCost(stage_space, cent_mom, w_cent))
-    rcost.addCost(aligator.QuadraticResidualCost(stage_space, centder_mom, w_centder))
+    
+    rcost.addCost("centroidal_cost",
+                  aligator.QuadraticResidualCost(stage_space, cent_mom, w_cent))
+    rcost.addCost("centroidal_derivative_cost",
+                  aligator.QuadraticResidualCost(stage_space, centder_mom, w_centder))
+    rcost.addCost("left_sole_link_pose_cost",
+                  aligator.QuadraticResidualCost(stage_space, frame_fn_LF, w_LF))
+    rcost.addCost("right_sole_link_pose_cost",
+                  aligator.QuadraticResidualCost(stage_space, frame_fn_RF, w_RF))
 
     stm = aligator.StageModel(rcost, create_dynamics(stage_space, contact_state))
 
     state_fn = aligator.StateErrorResidual(stage_space, nu, stage_space.neutral())[6:nv]
     stm.addConstraint(state_fn, constraints.BoxConstraint(-rmodel.upperPositionLimit[7:], -rmodel.lowerPositionLimit[7:]))
     
-    for i in range(len(contact_state)):
-        if contact_state[i]:
-            cone_cstr = aligator.WrenchConeResidual(space.ndx, nu, i, mu, Lfoot, Wfoot)
-            stm.addConstraint(cone_cstr, constraints.NegativeOrthant())
-    
     if contact_state[0]:
+        cone_cstr = aligator.CentroidalWrenchConeResidual(space.ndx, nu, 0, mu, Lfoot, Wfoot)
+        stm.addConstraint(cone_cstr, constraints.NegativeOrthant())
         stm.addConstraint(frame_vel_LF, constraints.EqualityConstraintSet())
     if contact_state[1]:
+        cone_cstr = aligator.CentroidalWrenchConeResidual(space.ndx, nu, 1, mu, Lfoot, Wfoot)
+        stm.addConstraint(cone_cstr, constraints.NegativeOrthant())
         stm.addConstraint(frame_vel_RF, constraints.EqualityConstraintSet()) 
     
     return stm
 
 term_cost = aligator.CostStack(space, nu)
-
+com_final = com0.copy()
+com_cstr = aligator.CenterOfMassTranslationResidual(space.ndx, nu, rmodel, com_final)
+term_constraint_com = aligator.StageConstraint(
+    com_cstr, constraints.EqualityConstraintSet()
+)
 
 """ Define gait and time parameters"""
 T_ds = 20
@@ -260,7 +258,7 @@ x_forward = 0.3
 y_forward = 0.
 foot_yaw = 0
 y_gap = 0.18
-x_depth = 0.00
+x_depth = 0.0
 
 foottraj = footTrajectory(
     rdata.oMf[LF_id].copy(), rdata.oMf[RF_id].copy(), T_ss, T_ds, nsteps, swing_apex, x_forward, y_forward, foot_yaw, y_gap, x_depth
@@ -268,12 +266,17 @@ foottraj = footTrajectory(
 
 """ Create the optimal problem and the full horizon """
 print("Create stages")
+stg2=createStage(contact_phases[0], rdata.oMf[LF_id].copy(), rdata.oMf[RF_id].copy(), urefs[0])
 stages_full = [createStage(contact_phases[0], rdata.oMf[LF_id].copy(), rdata.oMf[RF_id].copy(), urefs[0])]
 for i in range(1,Tmpc):
     stages_full.append(createStage(contact_phases[i], rdata.oMf[LF_id].copy(), rdata.oMf[RF_id].copy(), urefs[i]))
 
 stages = [createStage(contact_phases[0], rdata.oMf[LF_id].copy(), rdata.oMf[RF_id].copy(), urefs[0])] * nsteps
 problem = aligator.TrajOptProblem(x0, stages, term_cost)
+problem.addTerminalConstraint(term_constraint_com)
+stages_full_data = []
+for i in range(Tmpc):
+    stages_full_data.append(stages_full[i].createData())
 
 TOL = 1e-5
 mu_init = 1e-8 
@@ -286,12 +289,12 @@ solver.rollout_type = aligator.ROLLOUT_LINEAR
 #print("LDLT algo choice:", solver.ldlt_algo_choice)
 solver.linear_solver_choice = aligator.LQ_SOLVER_PARALLEL #LQ_SOLVER_SERIAL
 solver.force_initial_condition = True
-solver.sa_strategy = aligator.SA_FILTER
+solver.sa_strategy = aligator.SA_LINESEARCH
 solver.filter.beta = 1e-5
 solver.setNumThreads(8)
 solver.max_iters = max_iters
 
-solver.setup(problem)
+solver.setup(problem) #kproblem.getProblem()
 
 u_ref = np.concatenate((f_ref, f_ref, np.zeros(rmodel.nv - 6)))
 us_init = [u_ref for _ in range(nsteps)]
@@ -307,13 +310,22 @@ workspace = solver.workspace
 results = solver.results
 print(results)
 
-
 xs = results.xs.tolist().copy()
 us = results.us.tolist().copy()
 K_feedback = copy.deepcopy(results.controlFeedbacks()[0])
 
 solver.max_iters = 1
 
+""" Initialize simulation"""
+print("Initialize simu")
+device = BulletRobot(controlled_joints,
+                     modelPath,
+                     URDF_FILENAME,
+                     1e-3,
+                     rmodelComplete)
+device.changeCamera(1., 50, -15, [1.7, -0.5, 1.2])
+device.initializeJoints(qComplete)
+#device.changeCamera(1., 90, -5, [1.4, 0, 1])
 q_current, v_current = device.measureState()
 x_measured = shapeState(q_current, 
                         v_current, 
@@ -372,8 +384,8 @@ for t in range(Tmpc):
     )
     
     for j in range(nsteps):
-        problem.stages[j].cost.components[2].residual.setReference(LF_refs[j])
-        problem.stages[j].cost.components[3].residual.setReference(RF_refs[j]) 
+        problem.stages[j].cost.getComponent("left_sole_link_pose_cost").residual.setReference(LF_refs[j])
+        problem.stages[j].cost.getComponent("right_sole_link_pose_cost").residual.setReference(RF_refs[j]) 
 
     LF_measured.append(rdata.oMf[LF_id].copy())
     RF_measured.append(rdata.oMf[RF_id].copy())
@@ -384,15 +396,20 @@ for t in range(Tmpc):
 
     device.moveMarkers(LF_refs[0].translation, RF_refs[0].translation)
     problem.replaceStageCircular(stages_full[t])
+
+    """ if t == 500:
+        for s in range(nsteps):
+            device.resetState(xs[s][:rmodel.nq])
+            time.sleep(0.1)
+            print("s = " + str(s))
+            LF_ref = problem.stages[s].cost.components[2][0].residual.getReference().translation
+            RF_ref = problem.stages[s].cost.components[3][0].residual.getReference().translation
+            device.moveMarkers(LF_ref, RF_ref)
+        exit()  """
     
     com_final = com0.copy()
     com_final[:2] = (LF_refs[-1].translation[:2] + RF_refs[-1].translation[:2]) / 2
-    com_cstr = aligator.CentroidalCoMResidual(space.ndx, nu, com_final)
-    term_constraint_com = aligator.StageConstraint(
-        com_cstr, constraints.EqualityConstraintSet()
-    )
-    problem.removeTerminalConstraint()
-    problem.addTerminalConstraint(term_constraint_com)
+    problem.term_constraints.funcs[0].setReference(com_final)
     
     for j in range(Nsimu):
         #time.sleep(0.001)
@@ -470,9 +487,11 @@ for t in range(Tmpc):
     xs[0] = x_measured_prev
 
     problem.x0_init = x_measured_prev
-    solver.setup(problem)
+    #solver.setup(problem)
+    solver.cycleProblem(problem, stages_full_data[t])
     start = time.time()
     solver.run(problem, xs, us)
+
     end = time.time()
     time_computation = end - start
     solve_time.append(end - start)

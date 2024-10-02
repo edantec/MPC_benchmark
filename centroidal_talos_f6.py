@@ -82,6 +82,7 @@ RF_id = rmodel.getFrameId("right_sole_link")
 sole_ids = [LF_id, RF_id]
 base_id = rmodel.getFrameId("base_link")
 torso_id = rmodel.getFrameId("torso_2_link")
+name_sols = ["left_sole_link", "right_sole_link"]
 
 """ Initialize simulation """
 device = BulletRobot(controlled_joints,
@@ -110,10 +111,7 @@ for s in range(total_steps):
     contact_phases += [[True,False]] * T_ss + \
                       [[True,True]] * T_ds + \
                       [[False,True]] * T_ss + \
-                      [[True,True]] * T_ds 
-
-contact_phases += [[True,False]] * T_ss + \
-                  [[True,True]] * T_ds
+                      [[True,True]] * T_ds
 
 contact_phases += [[True,True]] * nsteps * 2
 
@@ -157,20 +155,6 @@ for i in range(total_steps):
         un = np.zeros(nu)
         un[8] = f_full
         urefs.append(un)
-
-for j in range(T_ds):
-    un = np.zeros(nu)
-    if i == 0:
-        un[2] = f_full * j / T_ds + f_half * (T_ds - j) / T_ds
-        un[8] = f_half * (T_ds - j) / T_ds 
-    else:
-        un[2] = f_full * (j + 1) / T_ds
-        un[8] = f_full * (T_ds - j) / T_ds 
-    urefs.append(un)
-for j in range(T_ss):
-    un = np.zeros(nu)
-    un[2] = f_full
-    urefs.append(un)
 
 for j in range(T_ds):
     un = np.zeros(nu)
@@ -223,7 +207,7 @@ def create_dynamics(contact_map):
 
 def createStage(contact_state, LF_pose, RF_pose, ur):
     contact_pose = [LF_pose.translation, RF_pose.translation]
-    contact_map = aligator.ContactMap(contact_state, contact_pose)
+    contact_map = aligator.ContactMap(name_sols, contact_state, contact_pose)
 
     rcost = aligator.CostStack(space, nu)
 
@@ -237,26 +221,27 @@ def createStage(contact_state, LF_pose, RF_pose, ur):
     angular_mom = aligator.AngularMomentumResidual(nx, nu, np.zeros(3))
     centroidal_com = aligator.CentroidalCoMResidual(nx, nu, com0)
 
-    rcost.addCost(aligator.QuadraticControlCost(space, ur, w_control))
-    rcost.addCost(
+    rcost.addCost("state_cost",
+        aligator.QuadraticControlCost(space, ur, w_control))
+    rcost.addCost("com_cost",
         aligator.QuadraticResidualCost(space, centroidal_com, w_centroidal_com)
     )
-    rcost.addCost(
+    rcost.addCost("linear_mom_cost",
         aligator.QuadraticResidualCost(space, linear_mom, w_linear_mom)
     )
-    rcost.addCost(
+    rcost.addCost("angular_mom_cost",
         aligator.QuadraticResidualCost(space, angular_mom, w_angular_mom)
     )
-    rcost.addCost(
+    rcost.addCost("angular_acc_cost",
         aligator.QuadraticResidualCost(space, angular_acc, w_angular_acc)
     )
-    rcost.addCost(
+    rcost.addCost("linear_acc_cost",
         aligator.QuadraticResidualCost(space, linear_acc, w_linear_acc)
     )
     stm = aligator.StageModel(rcost, create_dynamics(contact_map))
     for i in range(len(contact_state)):
         if contact_state[i]:
-            cone_cstr = aligator.WrenchConeResidual(space.ndx, nu, i, mu, Lfoot, Wfoot)
+            cone_cstr = aligator.CentroidalWrenchConeResidual(space.ndx, nu, i, mu, Lfoot, Wfoot)
             stm.addConstraint(cone_cstr, constraints.NegativeOrthant())
 
     return stm
@@ -269,6 +254,9 @@ for i in range(nsteps):
     stages.append(createStage(contact_phases[0], rdata.oMf[LF_id].copy(), rdata.oMf[RF_id].copy(), urefs[0]))
 
 stages_full = [createStage(contact_phases[i], rdata.oMf[LF_id].copy(), rdata.oMf[RF_id].copy(), urefs[i]) for i in range(T_mpc)]
+stages_full_data = []
+for i in range(T_mpc):
+    stages_full_data.append(stages_full[i].createData())
 
 problem = aligator.TrajOptProblem(x0, stages, term_cost)
 
@@ -280,13 +268,13 @@ mu_init = 1e-8
 rho_init = 0.0
 max_iters = 100
 verbose = aligator.VerboseLevel.VERBOSE
-solver = aligator.SolverProxDDP(TOL, mu_init, rho_init) #, verbose=verbose)
+solver = aligator.SolverProxDDP(TOL, mu_init, rho_init)
 #solver = aligator.SolverFDDP(TOL, verbose=verbose)
 solver.rollout_type = aligator.ROLLOUT_LINEAR
 #print("LDLT algo choice:", solver.ldlt_algo_choice)
-#solver.linear_solver_choice = aligator.LQ_SOLVER_PARALLEL #LQ_SOLVER_SERIAL
+solver.linear_solver_choice = aligator.LQ_SOLVER_PARALLEL #LQ_SOLVER_SERIAL
 solver.force_initial_condition = True
-#solver.setNumThreads(2)
+solver.setNumThreads(2)
 solver.max_iters = max_iters
 
 solver.setup(problem)
@@ -318,21 +306,6 @@ x_measured = shapeState(
     controlled_ids
 )
 
-force_left = []
-force_right = []
-torque_left = []
-torque_right = []
-LF_measured = []
-RF_measured = []
-LF_references = []
-RF_references = []
-x_multibody = []
-u_multibody = []
-com_measured = []
-solve_time = []
-L_measured = []
-QP_time = []
-
 g_p = 400
 g_h = 10
 g_b = 10
@@ -353,25 +326,32 @@ K_gains.append([np.eye(3) * g_b, np.eye(3) * 2 * np.sqrt(g_b)])
 weights_IKID = [500, 50000, 10, 1000, 100]  # qref, foot_pose, centroidal, base_rot, force
 IKID_solver = IKIDSolver_f6(rmodel, weights_IKID, K_gains, nk, mu, Lfoot, Wfoot, sole_ids, base_id, torso_id, force_size, False)
 
-qdot_prev = np.zeros(rmodel.nv)
 qdot = np.zeros(rmodel.nv)
 qddot = np.zeros(rmodel.nv)
 LF_vel_ref = np.zeros(6)
 RF_vel_ref = np.zeros(6)
 
-previous_contact_state = [True, True]
 device.showTargetToTrack(rdata.oMf[LF_id], rdata.oMf[RF_id])
 
-lowlevel_time = 0
-time_computation = 0.01
-
 """ Launch the MPC loop"""
+force_left = []
+force_right = []
+torque_left = []
+torque_right = []
+LF_measured = []
+RF_measured = []
+LF_references = []
+RF_references = []
+x_multibody = []
+u_multibody = []
+com_measured = []
+solve_time = []
+L_measured = []
 
 fd = 100
 theta = 6 * np.pi / 4
 f_disturbance = [np.cos(theta)* fd, np.sin(theta) * fd, 0]
 
-new_x_prev = x0.copy()
 for t in range(T_mpc):
     print("Time " + str(t))
     
@@ -384,34 +364,27 @@ for t in range(T_mpc):
         str(land_RF) + ", takeoff_LF = " + str(takeoff_LF) + ", landing_LF = ",
         str(land_LF),
     )
-    if land_LF == -1: 
+    if land_RF == -1: 
         foottraj.updateForward(0, 0, y_gap, y_forward, -0.01, 0, swing_apex)
 
     LF_refs, RF_refs = foottraj.updateTrajectory(
         takeoff_RF, takeoff_LF, land_RF, land_LF, rdata.oMf[LF_id].copy(), rdata.oMf[RF_id].copy()
     )
     device.moveMarkers(LF_refs[0].translation, RF_refs[0].translation)
-    
-    contact_state = problem.stages[0].dynamics.differential_dynamics.contact_map.contact_states
-    
+
     for n in range(nsteps):
         contact_state = problem.stages[n].dynamics.differential_dynamics.contact_map.contact_states
         if contact_state[0]:
             problem.stages[n].dynamics.differential_dynamics.contact_map.contact_poses[0] = LF_refs[n].translation
-            problem.stages[n].cost.components[4].residual.contact_map.contact_poses[0] = LF_refs[n].translation
-            problem.stages[n].cost.components[5].residual.contact_map.contact_poses[0] = LF_refs[n].translation 
+            problem.stages[n].cost.getComponent("angular_acc_cost").residual.contact_map.contact_poses[0] = LF_refs[n].translation
+            problem.stages[n].cost.getComponent("linear_acc_cost").residual.contact_map.contact_poses[0] = LF_refs[n].translation 
         
         if contact_state[1]:
             problem.stages[n].dynamics.differential_dynamics.contact_map.contact_poses[1] = RF_refs[n].translation
-            problem.stages[n].cost.components[4].residual.contact_map.contact_poses[1] = RF_refs[n].translation
-            problem.stages[n].cost.components[5].residual.contact_map.contact_poses[1] = RF_refs[n].translation 
+            problem.stages[n].cost.getComponent("angular_acc_cost").residual.contact_map.contact_poses[1] = RF_refs[n].translation
+            problem.stages[n].cost.getComponent("linear_acc_cost").residual.contact_map.contact_poses[1] = RF_refs[n].translation 
     
     contact_state = problem.stages[0].dynamics.differential_dynamics.contact_map.contact_states
-    qdot_prev = qdot.copy()
-
-    """ if t == 100:
-        play_trajectory(x0_multibody, x_measured)
-        exit()   """
     
     if problem.stages[0].dynamics.differential_dynamics.contact_map.contact_states[0]:
         force_left.append(us[0][:3])
@@ -431,24 +404,12 @@ for t in range(T_mpc):
     LF_references.append(LF_refs[0])
     RF_references.append(RF_refs[0])
 
-    problem.replaceStageCircular(stages_full[t])
-    com_final = com0.copy()
-    com_final[:2] = (LF_refs[-1].translation[:2] + RF_refs[-1].translation[:2]) / 2
-    com_cstr = aligator.CentroidalCoMResidual(space.ndx, nu, com_final)
-    term_constraint_com = aligator.StageConstraint(
-        com_cstr, constraints.EqualityConstraintSet()
-    )
-    problem.removeTerminalConstraint()
-    problem.addTerminalConstraint(term_constraint_com)
-
     """ Compute various references for ID """
     q_diff, dq_diff, LF_diff, dLF_diff, RF_diff, dRF_diff, base_diff, dbase_diff, torso_diff, dtorso_diff = \
       compute_ID_references(space_multibody, rmodel, rdata, LF_id, RF_id, base_id, torso_id, x0_multibody, x_measured, LF_refs, RF_refs, dt)
     dH = solver.workspace.problem_data.stage_data[0].dynamics_data.continuous_data.xdot[3:9]
 
     for j in range(Nsimu):
-        lowlevel_time += 0.001
-        time.sleep(0.0005)
         q_current, v_current = device.measureState()
         
         x_measured = shapeState(q_current, 
@@ -456,8 +417,6 @@ for t in range(T_mpc):
                                 nq, 
                                 nq + nv, 
                                 controlled_ids)
-        
-        x_multibody.append(x_measured)
 
         new_x = np.zeros(9)
         new_x[:3] = pin.centerOfMass(rmodel, rdata, x_measured[:nq])
@@ -465,7 +424,6 @@ for t in range(T_mpc):
         new_x[3:6] = rdata.hg.linear
         new_x[6:] = rdata.hg.angular
 
-        start2 = time.time()
         pin.forwardKinematics(rmodel, rdata, x_measured[:nq])
         pin.updateFramePlacements(rmodel, rdata)
         pin.computeJointJacobians(rmodel,rdata)
@@ -487,49 +445,25 @@ for t in range(T_mpc):
             forces, dH, M
         )
 
-        for z in range(rmodel.nv - 6):
-            torque[z] = max(torque[z], u_min[z])
-            torque[z] = min(torque[z], u_max[z])
-
-        end2 = time.time() 
-        QP_time.append(end2 - start2)
-        #print(end - start) 
-
-        u_multibody.append(torque)
         device.execute(torque)
-        if t >= 160 and t < 171:
+        x_multibody.append(x_measured)
+        u_multibody.append(torque)
+        """ if t >= 160 and t < 171:
             print("Force applied")
-            device.apply_force(f_disturbance, [0, 0, 0]) 
-    
-    lowlevel_time = 0
-    previous_contact_state = copy.deepcopy(contact_state)
-    com_measured.append(new_x[:3])
-    L_measured.append(rdata.hg.angular.copy())
+            device.apply_force(f_disturbance, [0, 0, 0])  """
+
     xs = xs[1:] + [xs[-1]]
     us = us[1:] + [us[-1]]
-    xs[0] = new_x_prev
+    xs[0] = new_x
 
-    problem.x0_init = new_x_prev
-    solver.setup(problem)
-    start = time.time()
+    problem.x0_init = new_x
+    problem.replaceStageCircular(stages_full[t])
+    solver.cycleProblem(problem, stages_full_data[t])
     solver.run(problem, xs, us)
-    end = time.time()
-    solve_time.append(end - start)
-    time_computation = end - start
-    print(end - start)
-
-    new_x_prev = new_x.copy()
 
     xs = solver.results.xs.tolist().copy()
     us = solver.results.us.tolist().copy()
     K0 = solver.results.controlFeedbacks()[0]
-
-print("Elapsed time:")
-print(np.mean(np.array(solve_time)))
-print("QP mean time:")
-print(np.mean(np.array(QP_time)))
-print("QP std time:")
-print(np.std(np.array(QP_time)))
 
 
 force_left = np.array(force_left)

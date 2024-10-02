@@ -435,7 +435,7 @@ for t in range(T_mpc):
 
     for j in range(Nsimu):
         lowlevel_time += 0.001
-        time.sleep(0.0005)
+        #time.sleep(0.0005)
         q_current, v_current = device.measureState()
         
         x_measured = shapeState(q_current, 
