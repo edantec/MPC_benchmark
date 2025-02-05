@@ -287,7 +287,7 @@ class footTrajectory:
         wps[2, 4] += height
         for i in range(5, 9):  # final position. final vel,acc and jerk == 0
             wps[:, i] = placement_final.translation
-        translation = ndcurves.bezier(wps, time_init, time_final)
+        translation = ndcurves.bezier3(wps, time_init, time_final)
         pBezier = ndcurves.piecewise_SE3(
             ndcurves.SE3Curve(
                 translation, placement_init.rotation, placement_final.rotation

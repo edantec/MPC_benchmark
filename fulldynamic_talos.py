@@ -7,7 +7,6 @@ The contacts forces are modeled as 6D wrenches.
 import numpy as np
 import aligator
 import pinocchio as pin
-import matplotlib.pyplot as plt
 from bullet_robot import BulletRobot
 import time
 
@@ -27,6 +26,7 @@ from aligator import (manifolds,
 
 rmodelComplete, rmodel, qComplete, q0 = loadTalos()
 rdata = rmodel.createData()
+
 
 nq = rmodel.nq
 nv = rmodel.nv
@@ -56,8 +56,7 @@ device = BulletRobot(controlled_joints,
                         1e-3,
                         rmodelComplete)
 device.initializeJoints(qComplete)
-device.changeCamera(1., 50, -15, [1.7, -0.5, 1.2])
-#device.changeCamera(1., 90, -5, [1, 0, 1])
+device.changeCamera(1., 90, -5, [1, 0, 1])
 q_current, v_current = device.measureState()
 
 space = manifolds.MultibodyPhaseSpace(rmodel)
@@ -91,7 +90,7 @@ for fname, fid in FOOT_FRAME_IDS.items():
         pl2,
         pin.LOCAL,
     )
-    cm.corrector.Kp[:] = (1, 1, 10, 1, 1, 1)
+    cm.corrector.Kp[:] = (0, 0, 10, 0, 0, 0)
     cm.corrector.Kd[:] = (50, 50, 50, 50, 50, 50)
     cm.name = fname
     constraint_models.append(cm)
@@ -246,7 +245,7 @@ term_cost.addCost(aligator.QuadraticResidualCost(space, frame_fn_LF, w_LFRF * np
 term_cost.addCost(aligator.QuadraticResidualCost(space, frame_fn_RF, w_LFRF * np.eye(6)))
 
 """ Define gait and time parameters"""
-T_ds = 100
+T_ds = 30
 T_ss = 80
 dt = 0.01
 nsteps = 100
@@ -350,8 +349,8 @@ for j in range(nsteps * 2):
 
 """ Define feet trajectory """
 swing_apex = 0.15
-x_forward = 0.1
-y_forward = 0.0
+x_forward = 0.
+y_forward = 0.
 foot_yaw = 0
 y_gap = 0.18
 x_depth = 0.0
@@ -375,10 +374,9 @@ problem = aligator.TrajOptProblem(x0, stages, term_cost)
 TOL = 1e-5
 mu_init = 1e-8 
 
-rho_init = 0.0
 max_iters = 100
 verbose = aligator.VerboseLevel.VERBOSE
-solver = aligator.SolverProxDDP(TOL, mu_init, rho_init)# , verbose=verbose)
+solver = aligator.SolverProxDDP(TOL, mu_init)# , verbose=verbose)
 #solver = aligator.SolverFDDP(TOL, verbose=verbose)
 solver.rollout_type = aligator.ROLLOUT_LINEAR
 #print("LDLT algo choice:", solver.ldlt_algo_choice)
@@ -461,8 +459,8 @@ for t in range(Tmpc):
     )
     
     for j in range(nsteps):
-        problem.stages[j].cost.components[3][0].residual.setReference(LF_refs[j])
-        problem.stages[j].cost.components[4][0].residual.setReference(RF_refs[j])
+        problem.stages[j].cost.getComponent(3).residual.setReference(LF_refs[j])
+        problem.stages[j].cost.getComponent(4).residual.setReference(RF_refs[j])
 
     if problem.stages[0].dynamics.differential_dynamics.constraint_models.__len__() == 1:
         if problem.stages[0].dynamics.differential_dynamics.constraint_models[0].name == 'left_sole_link':
@@ -494,16 +492,6 @@ for t in range(Tmpc):
     pin.computeCentroidalMomentum(rmodel,rdata, x_measured[:nq], x_measured[nq:])
     L_measured.append(rdata.hg.angular.copy())
 
-    """ if t == 950:
-        for s in range(nsteps):
-            device.resetState(xs[s][:rmodel.nq])
-            time.sleep(0.1)
-            print("s = " + str(s))
-            LF_ref = problem.stages[s].cost.components[2].residual.getReference().translation
-            RF_ref = problem.stages[s].cost.components[3].residual.getReference().translation
-            device.moveMarkers(LF_ref, RF_ref)
-        exit()  """
-
     device.moveMarkers(LF_refs[0].translation, RF_refs[0].translation)
     problem.replaceStageCircular(stages_full[t])
     solver.workspace.cycleAppend(stages_full_data[t])
@@ -515,8 +503,8 @@ for t in range(Tmpc):
     term_constraint_com = aligator.StageConstraint(
         com_cstr, constraints.EqualityConstraintSet()
     )
-    #problem.removeTerminalConstraint()
-    #problem.addTerminalConstraint(term_constraint_com)
+    problem.removeTerminalConstraint()
+    problem.addTerminalConstraint(term_constraint_com)
     
     problem.term_cost.components[2][0].residual.setReference(LF_refs[-1])
     problem.term_cost.components[3][0].residual.setReference(RF_refs[-1])
@@ -548,6 +536,7 @@ for t in range(Tmpc):
     problem.x0_init = x_measured_prev
     
     start = time.time()
+    solver.setup(problem)
     solver.run(problem, xs, us)
     end = time.time()
     time_computation = end - start

@@ -6,9 +6,9 @@ import pinocchio as pin
 CURRENT_DIRECTORY = os.getcwd()
 DEFAULT_SAVE_DIR = CURRENT_DIRECTORY + '/tmp'
 
-SMALL_SIZE = 10
-MEDIUM_SIZE = 12
-BIGGER_SIZE = 14
+SMALL_SIZE = 14
+MEDIUM_SIZE = 16
+BIGGER_SIZE = 18
 
 plt.rcParams['figure.dpi'] = 170
 plt.rc('font', size=SMALL_SIZE)          # controls default text sizes
@@ -277,7 +277,7 @@ axs[1, 1].plot(ttl, footylimdown_cent, 'r')
 axs[1, 1].set_xlabel("Time (s)")
 axs[1, 1].grid(True)
 #axs[1, 1].legend(loc="upper left")
-axs[0, 2].set_title('Kinodynamics')
+axs[0, 2].set_title('Kino-dynamics')
 axs[0, 2].plot(ttl_kino, cop_total_kino[:,0], label = 'CoP in x')
 axs[0, 2].plot(ttl_kino, com_kino[T_start:,0], 'g', label = 'CoM in x')
 axs[0, 2].plot(ttl_kino, footxlimup_kino, 'r', label = 'Support limits')
@@ -347,11 +347,11 @@ plt.legend(loc="upper left") """
 
 plt.figure('Angular momentum')
 plt.plot(ttl, L_measured[:,2], label = 'Centroidal')
-plt.plot(ttl_kino, L_measured_kino[T_start:,2], label = 'Kinodynamics')
+plt.plot(ttl_kino, L_measured_kino[T_start:,2], label = 'Kino-dynamics')
 plt.plot(ttl_full, L_measured_full[:,2], label = 'Full dynamics')
 plt.grid(True)
 plt.xlabel("Time (s)")
-plt.ylabel("Angular momentum along z $(kg.m^2.s^{-1})$")
+plt.ylabel("Ang. mom. along z")
 plt.legend(loc="lower left")
 # Foot force
 
@@ -416,7 +416,7 @@ axs[2,0].set_xlabel('Time (s)')
 axs[2,0].grid(True)
 #axs[2,0].set_title('Fz left')
 axs[0,1].plot(ttl, RF_torque[:,0], label = 'Centroidal')
-axs[0,1].plot(ttl_kino, RF_torque_kino[T_start:,0], label = 'Kinodynamics')
+axs[0,1].plot(ttl_kino, RF_torque_kino[T_start:,0], label = 'Kino-dynamics')
 axs[0,1].plot(ttl_full, RF_torque_full[:,0], label = 'Full dynamics')
 axs[0,1].legend(loc='upper left')
 axs[0,1].grid(True)
@@ -481,7 +481,7 @@ axs[2].plot(ttl_kino, RF_trans_kino[:,kk])
 axs[2].plot(ttl_kino, RF_trans_ref_kino[:,kk], 'r')
 axs[2].set_xlim(1.2,2.)
 axs[2].grid(True)
-axs[2].set_title('Kinodynamics')
+axs[2].set_title('Kino-dynamics')
 axs[2].set_ylabel('Height (m)')
 axs[2].set_xlabel('Time (s)')
 # Joint power
@@ -509,7 +509,7 @@ plt.grid(True)
 plt.ylabel('Dissipated power $(kg.m^2.s^{-3})$')
 plt.xlabel('Time (s)')
 plt.plot(ttx, power, label = "Centroidal")
-plt.plot(ttx_kino, power_kino,label = "Kinodynamics")
+plt.plot(ttx_kino, power_kino,label = "Kino-dynamics")
 plt.plot(ttx_full, power_full,label = "Full dynamics")
 plt.legend(loc = "upper left")
 print("Mean power for centroidal is " + str(np.mean(power)))

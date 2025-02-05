@@ -7,14 +7,15 @@ A collection of Python scripts used to benchmark three kind of locomotion models
 The Python scripts launch a Pybullet simulation of the humanoid robot Talos performing various walking motions on flat ground and stairs. 
 
 ## Requirements
-* [Aligator](https://github.com/Simple-Robotics/aligator.git) devel branch
+* [Aligator](https://github.com/Simple-Robotics/aligator.git) >= v0.10.0
 * [proxsuite-nlp](https://github.com/Simple-Robotics/proxsuite-nlp.git) >= 0.6.3
 * [Eigen3](https://eigen.tuxfamily.org) >= 3.3.7
 * [Boost](https://www.boost.org) >= 1.71.0
 * Pybullet >= 3.25
 * [example-robot-data](https://github.com/Gepetto/example-robot-data) >= 4.1.0
 * [Pinocchio](https://github.com/stack-of-tasks/pinocchio) >= 2.9.1
-* [eigenpy](https://github.com/stack-of-tasks/eigenpy)>=3.4.0 (Python bindings)
+* [eigenpy](https://github.com/stack-of-tasks/eigenpy) >=3.4.0 (Python bindings)
+* [ndcurves](https://github.com/loco-3d/ndcurves) >= 2.0.0
 
 ## Contributors
 * [Justin Carpentier](https://jcarpent.github.io/) (Inria): project instructor
